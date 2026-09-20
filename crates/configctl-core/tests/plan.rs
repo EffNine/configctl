@@ -329,10 +329,11 @@ fn plan_persistence_is_immutable() {
     let loaded = loaded_for(&p, payload_hashes());
     let st = ObservedState::default();
     let plan = plan::build_plan(&loaded, &st, &BTreeSet::new(), "fixed-id", 1);
-    let path = configctl_core::state::save_plan(&state, &plan).unwrap();
+    let path =
+        configctl_core::state::save_plan(&state, &plan, std::path::Path::new("/tmp/fake")).unwrap();
     assert!(path.exists());
     // Reload verifies hash.
-    let (reloaded, status) = configctl_core::state::load_plan(&state, "fixed-id").unwrap();
+    let (reloaded, status, _) = configctl_core::state::load_plan(&state, "fixed-id").unwrap();
     assert_eq!(reloaded.plan_hash, plan.plan_hash);
     assert_eq!(status, "planned");
     // Tamper with the doc → load fails.
@@ -351,9 +352,9 @@ fn approval_binding() {
     let loaded = loaded_for(&p, payload_hashes());
     let st = ObservedState::default();
     let plan = plan::build_plan(&loaded, &st, &BTreeSet::new(), "appr-1", 1);
-    configctl_core::state::save_plan(&state, &plan).unwrap();
+    configctl_core::state::save_plan(&state, &plan, std::path::Path::new("/tmp/fake")).unwrap();
     configctl_core::state::approve_plan(&state, "appr-1", 2).unwrap();
-    let (_, status) = configctl_core::state::load_plan(&state, "appr-1").unwrap();
+    let (_, status, _) = configctl_core::state::load_plan(&state, "appr-1").unwrap();
     assert_eq!(status, "approved");
 }
 

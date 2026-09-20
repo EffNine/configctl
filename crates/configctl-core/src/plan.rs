@@ -426,7 +426,7 @@ pub fn build_plan(
             Some(o) => {
                 if let Some(want_enabled) = s.enabled {
                     if o.enabled != Some(want_enabled) {
-                        operations.push(mk_op(
+                        let mut op = mk_op(
                             "systemd",
                             if want_enabled {
                                 OperationKind::ServiceEnable
@@ -443,7 +443,9 @@ pub fn build_plan(
                             None,
                             None,
                             RollbackSupport::Partial,
-                        ));
+                        );
+                        op.details.insert("scope".into(), "enabled".into());
+                        operations.push(op);
                     }
                 }
                 if let Some(want_running) = s.running {
@@ -455,7 +457,7 @@ pub fn build_plan(
                                 s.name
                             ),
                         });
-                        operations.push(mk_op(
+                        let mut op = mk_op(
                             "systemd",
                             if want_running {
                                 OperationKind::ServiceEnable
@@ -472,7 +474,9 @@ pub fn build_plan(
                             None,
                             None,
                             RollbackSupport::Partial,
-                        ));
+                        );
+                        op.details.insert("scope".into(), "running".into());
+                        operations.push(op);
                     }
                 }
             }

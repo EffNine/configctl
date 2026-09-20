@@ -67,7 +67,8 @@ fn plan_creates_and_persists() {
     assert!(plan.operations.iter().any(|o| o.target == "ripgrep"));
     assert!(plan.operations.iter().any(|o| o.target == "~/.gitconfig"));
     // Persisted + reloadable.
-    let (reloaded, _) = configctl_core::state::load_plan(&state, "plan-001").expect("reload plan");
+    let (reloaded, _, _) =
+        configctl_core::state::load_plan(&state, "plan-001").expect("reload plan");
     assert_eq!(reloaded.plan_hash, plan.plan_hash);
     // Human rendering mentions the plan id and no secret values.
     let human = plan_cmd::render_human(&plan);

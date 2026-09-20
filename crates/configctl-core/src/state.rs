@@ -109,7 +109,8 @@ fn open_db(dir: &Path) -> Result<Connection, String> {
            status TEXT NOT NULL,
            approved_at INTEGER,
            created_at INTEGER NOT NULL,
-           doc_path TEXT NOT NULL
+           doc_path TEXT NOT NULL,
+           bundle_dir TEXT NOT NULL DEFAULT ''
          );
          CREATE TABLE IF NOT EXISTS journal (
            id INTEGER PRIMARY KEY,
@@ -132,6 +133,11 @@ fn open_db(dir: &Path) -> Result<Connection, String> {
          CREATE INDEX IF NOT EXISTS journal_by_plan ON journal(plan_id);",
     )
     .map_err(|e| format!("init state db: {e:?}"))?;
+    // Best-effort migration for databases created before `bundle_dir` existed.
+    let _ = conn.execute(
+        "ALTER TABLE plans ADD COLUMN bundle_dir TEXT NOT NULL DEFAULT ''",
+        [],
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -150,7 +156,9 @@ pub const STATUS_ROLLED_BACK: &str = "rolled_back";
 
 /// Save a plan (immutable after creation): DB row + `<dir>/plans/<id>.json`.
 /// Refuses to overwrite an existing plan id with different content.
-pub fn save_plan(dir: &Path, plan: &Plan) -> Result<PathBuf, String> {
+/// `bundle_dir` is the canonical profile bundle path the plan was built from
+/// (needed at apply time to read payloads; verified against `profile_hash`).
+pub fn save_plan(dir: &Path, plan: &Plan, bundle_dir: &Path) -> Result<PathBuf, String> {
     ensure_state_dir(dir)?;
     let doc_path = dir.join("plans").join(format!("{}.json", plan.plan_id));
     if doc_path.exists() {
@@ -179,8 +187,8 @@ pub fn save_plan(dir: &Path, plan: &Plan) -> Result<PathBuf, String> {
     }
     let conn = open_db(dir)?;
     conn.execute(
-        "INSERT OR IGNORE INTO plans (id, profile, profile_hash, state_hash, plan_hash, status, created_at, doc_path)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT OR IGNORE INTO plans (id, profile, profile_hash, state_hash, plan_hash, status, created_at, doc_path, bundle_dir)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             plan.plan_id,
             plan.profile_identity,
@@ -190,6 +198,7 @@ pub fn save_plan(dir: &Path, plan: &Plan) -> Result<PathBuf, String> {
             STATUS_PLANNED,
             plan.created_at,
             doc_path.to_string_lossy().to_string(),
+            bundle_dir.to_string_lossy().to_string(),
         ],
     )
     .map_err(|e| format!("save plan row: {e:?}"))?;
@@ -204,16 +213,17 @@ pub fn save_plan(dir: &Path, plan: &Plan) -> Result<PathBuf, String> {
 }
 
 /// Load a plan by id (verifies the stored hash matches the document).
-pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String), String> {
+/// Returns `(plan, status, bundle_dir)`.
+pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String, PathBuf), String> {
     if plan_id.contains('/') || plan_id.contains('\0') || plan_id.contains("..") {
         return Err(format!("invalid plan id: {plan_id:?}"));
     }
     let conn = open_db(dir)?;
-    let (plan_hash, status): (String, String) = conn
+    let (plan_hash, status, bundle_dir): (String, String, String) = conn
         .query_row(
-            "SELECT plan_hash, status FROM plans WHERE id = ?1",
+            "SELECT plan_hash, status, bundle_dir FROM plans WHERE id = ?1",
             params![plan_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(|_| format!("unknown plan id: {plan_id:?}"))?;
     let doc_path = dir.join("plans").join(format!("{plan_id}.json"));
@@ -229,7 +239,7 @@ pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String), String> {
             "plan {plan_id} hash mismatch: document was modified after creation"
         ));
     }
-    Ok((plan, status))
+    Ok((plan, status, PathBuf::from(bundle_dir)))
 }
 
 /// Mark a plan approved (bound to the exact hash).

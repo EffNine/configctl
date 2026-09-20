@@ -161,7 +161,7 @@ pub fn run_plan(
     let plan = plan::build_plan(&loaded, &observed, &owned, &plan_id, created_at);
 
     // Persist (immutable; refuses conflicting overwrite).
-    match configctl_core::state::save_plan(&state_dir, &plan) {
+    match configctl_core::state::save_plan(&state_dir, &plan, &loaded.dir) {
         Ok(doc_path) => PlanOutput {
             plan: Some(plan),
             profile_dir: Some(profile_dir),

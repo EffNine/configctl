@@ -2,7 +2,7 @@
 //! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::{capture, plan, scan};
+use configctl_cli::commands::{apply, capture, plan, scan};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
@@ -88,6 +88,27 @@ enum Cmd {
         /// Increase diagnostic detail
         #[arg(short, long)]
         verbose: bool,
+    },
+    /// Execute exactly a persisted approved plan (the only mutating path)
+    Apply {
+        /// Plan ID produced by `configctl plan` (never a profile path)
+        #[arg(value_name = "PLAN_ID")]
+        plan: Option<String>,
+        /// Explicit plan ID flag (alias for the positional)
+        #[arg(long = "plan", value_name = "PLAN_ID")]
+        plan_flag: Option<String>,
+        /// Approve the current plan non-interactively
+        #[arg(short, long)]
+        yes: bool,
+        /// Preview without writing
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Take ownership of unmanaged targets (must be plan conflicts)
+        #[arg(long = "adopt", value_name = "TARGET")]
+        adopt: Vec<String>,
+        /// Machine-readable JSON on stdout (requires --yes unless --dry-run)
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -247,6 +268,52 @@ fn main() -> ExitCode {
                     }
                 }
                 (None, _) => ExitCode::from(1),
+            }
+        }
+        Some(Cmd::Apply {
+            plan: plan_arg,
+            plan_flag,
+            yes,
+            dry_run,
+            adopt,
+            json,
+        }) => {
+            let out = apply::run_apply(
+                plan_arg.as_deref(),
+                plan_flag.as_deref(),
+                cli.state_dir.as_deref(),
+                None,
+                *yes,
+                *dry_run,
+                adopt,
+                *json,
+                &runner,
+            );
+            match (&out.report, &out.error) {
+                (Some(rep), _) => {
+                    if *json {
+                        let env =
+                            configctl_cli::render::Envelope::ok("apply", apply::report_json(rep));
+                        println!("{}", env.to_json());
+                    } else {
+                        print!("{}", apply::render_human(rep));
+                    }
+                    ExitCode::SUCCESS
+                }
+                (None, Some(e)) => {
+                    if *json {
+                        let env = configctl_cli::render::Envelope::error(
+                            "apply",
+                            &apply::error_message(e),
+                            "see `configctl doctor` for recovery options",
+                        );
+                        println!("{}", env.to_json());
+                    } else {
+                        eprintln!("error: {}", apply::error_message(e));
+                    }
+                    ExitCode::from(out.exit_code as u8)
+                }
+                (None, None) => ExitCode::from(1),
             }
         }
     };
