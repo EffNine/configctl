@@ -1,9 +1,15 @@
 # CAPTURE.md — P2 declarative profile capture (implemented)
 
-Status: **Implemented in P2.** `configctl capture` transforms observed local
-environment state into a declarative, portable profile bundle. It is
-**non-mutating** w.r.t. the source environment: it reads the machine and
-writes exactly one new artifact (the output bundle), and nothing else.
+Status: **Implemented (v1.0.0-rc.1); expanded in `1.1.0-dev` (hardcore
+capture).** `configctl capture` transforms observed local environment state
+into a declarative, portable profile bundle. It is **non-mutating** w.r.t. the
+source environment: it reads the machine and writes exactly one new artifact
+(the output bundle), and nothing else.
+
+Since v1.1, capture follows the hardcore pipeline (discover broadly →
+classify with evidence → capture what is reproducible → reference secrets →
+record the rest) and emits profile **schema v2**; v1 bundles still load. See
+`V1_1_HARDCORE.md`, `RESOURCE_CLASSIFICATION.md`, and `PROFILE_SCHEMA.md` §2.7.
 
 ```text
 P1:  Machine → DISCOVER → Observed State

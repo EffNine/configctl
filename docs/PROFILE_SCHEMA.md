@@ -1,16 +1,18 @@
-# PROFILE_SCHEMA.md — Profile format v1
+# PROFILE_SCHEMA.md — Profile format (v1 + v2)
 
-Status: **Implemented (v1.0.0-rc.1).** This document describes actual
-behavior. Collections use TOML **array-of-tables** form (`[[files]]`,
-`[[services]]`, `[[variables]]`); map forms such as
-`[files."~/.gitconfig"]` are rejected by validation (fail closed).
+Status: **v1.0.0-rc.1 implemented; v1.1 adds schema v2 (capture emits v2,
+v1 bundles keep loading).** This document describes actual behavior.
+Collections use TOML **array-of-tables** form (`[[files]]`, `[[services]]`,
+`[[variables]]`); map forms such as `[files."~/.gitconfig"]` are rejected by
+validation (fail closed).
 
 This document defines the profile bundle format that `configctl capture`
 produces and `configctl plan/apply/verify` consumes.
 
 Format: **TOML v1.0** (see ARCHITECTURE.md D2). Every file declares
-`schema_version`. Unknown top-level keys are rejected. Unknown keys inside
-known tables are rejected unless prefixed with `x-` (extension namespace).
+`schema_version`. Unknown keys — at top level and inside known tables — are
+rejected, including `x-*` keys in the current implementation (an extension
+namespace is documented direction only; see §6).
 
 > Rationale for TOML over YAML: maintained Rust tooling, unambiguous parsing,
 > no anchor/alias deserialization pitfalls, and no indentation-sensitive
@@ -48,7 +50,7 @@ Rules:
 ## 2. `profile.toml` — full schema
 
 ```toml
-schema_version = 1              # required, integer, must equal 1 for this spec
+schema_version = 1              # required; 1 (shown) and 2 (v1.1 capture) are supported
 name = "work"                   # required, [a-z0-9][a-z0-9-_]{0,63}
 description = "Work laptop baseline"
 configctl_version = "0.1.0"     # optional, informational (producer version)
@@ -111,7 +113,7 @@ env_files = [".env", ".env.local", ".env.test"]   # optional; default: all disco
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `schema_version` | integer | yes | Must be exactly `1` for this spec. Newer values are refused with a clear error, never guessed. |
+| `schema_version` | integer | yes | Supported: `1` and `2` (v1.1 capture emits `2`; see §2.7). Newer values are refused with a clear error, never guessed. |
 | `name` | string | yes | Pattern `[a-z0-9][a-z0-9-_]{0,63}`. Must match the directory name when loaded by name. |
 | `description` | string | no | Free text, ≤ 512 chars. |
 | `configctl_version` | string | no | Informational; ignored for semantics. |
@@ -126,9 +128,12 @@ env_files = [".env", ".env.local", ".env.test"]   # optional; default: all disco
 | Key | Type | Rules |
 |---|---|---|
 | `apt` | array of strings | Package names matching `[a-z0-9][a-z0-9+.-]*`. Duplicates rejected. Shell metacharacters rejected. Versions are not specified here; see `packages.lock.toml`. |
+| `other` | map: manager → array of strings | v2 only. Names observed from other managers (`cargo`, `npm`, `pip`, `mise`, …), sorted and unique per manager. **Observational**: recorded in the profile; `apply` does not install them in v1.1 (see LIMITATIONS.md). |
 
-Unknown package-manager keys (`dnf`, `pacman`, …) are rejected in schema v1 —
-they are deferred features, and accepting-and-ignoring them would be dishonest.
+Unknown top-level package-manager keys (`dnf`, `pacman`, …) are rejected in
+schema v1 — they are deferred features, and accepting-and-ignoring them would
+be dishonest. In v2, multi-manager names live under `[packages.other]` and
+apt stays top-level for v1 compatibility.
 
 ### 2.3 `[[files]]`
 
@@ -195,6 +200,31 @@ Rules:
 | `path` | string | yes | `~/...` path; must exist at verify time or report `MISSING`. |
 | `env_schema` | string | no | Relative path to a schema file in `env/`. |
 | `env_files` | array of strings | no | Explicit file list. Default: discovered `.env*` files per §4. |
+
+### 2.7 Schema v2 additions (v1.1)
+
+Capture emits v2. All v2 sections are **informational / record-only** unless
+stated otherwise: they preserve observed context with provenance and never
+grant `apply` new powers.
+
+| Section | Fields | Semantics |
+|---|---|---|
+| `[machine]` | `hostname`, `kernel`, `boot_mode`, `root_filesystem` | Identity context; never reproduced |
+| `[hardware]` | `cpu_model`, `logical_cpus`, `total_ram_kib`, `gpus[]`, `cuda`, `rocm`, `compilers[]` | Hardware context; never reproduced |
+| `[[toolchains]]` | `name`, `version`, `provenance` | Version-probed tools; observed, not installed |
+| `[[directories]]` | `path`, `kind` (`project`\|`config`), `classification` | Recorded project/config roots; not created by `apply` in v1.1 |
+| `[[mounts]]` | `mountpoint`, `fstype`, `remote`, `pseudo` | Recorded mounts; never traversed by `apply` |
+| `[[executables]]` | `name`, `provenance`, `version` | Notable executables; never installed from this |
+| `[provenance]` | `source`, `migrated_from` | Producing subsystem; migration lineage |
+| `packages.other` | manager → names | See §2.2 |
+| `packages.lock.toml [other]` | manager → {name → version} | Recorded versions per manager (record-and-report) |
+| `files[].origin` / `detected_by` / `classification` | strings | Where and why a file was captured |
+| `services[].scope` / `classification` | `user` \| `system` | System scope is `PRIVILEGED`; `apply` refuses it |
+| `projects[].markers` / `roles` | array / map | Discovery evidence (`Cargo.toml`, `.github`; role counts) |
+
+Validation is unchanged in spirit: unknown keys are rejected, secrets are
+still forbidden, and a v1 bundle loads through the compatibility layer
+without being rewritten.
 
 ---
 
@@ -298,7 +328,7 @@ type = "boolean"
 
 ---
 
-## 5. `packages.lock.toml` (defined now, emitted at P4+)
+## 5. `packages.lock.toml` (emitted since v1.0; v1.1 adds `[other]`)
 
 ```toml
 schema_version = 1
@@ -306,11 +336,19 @@ schema_version = 1
 [apt]
 git = "1:2.43.0-1ubuntu7.2"
 ripgrep = "14.1.0-1"
+
+[other.cargo]              # v2: per-manager name → version
+ripgrep = "14.1.0"
+
+[other.npm]
+typescript = "5.6.3"
 ```
 
 - Records the exact version observed at capture/apply time.
 - v0.1 semantics: **record and report**; version pinning/downgrade enforcement
   is deferred. `verify` reports version drift when a lock entry exists.
+- v2 `[other]` versions are observational provenance; only `[apt]` feeds
+  planning today.
 
 ---
 
@@ -318,12 +356,16 @@ ripgrep = "14.1.0-1"
 
 - `schema_version` is mandatory in every profile file.
 - Loading a file whose version is **greater** than the tool supports is a hard
-  error: `unsupported profile schema_version 2 (this build supports 1)`.
-- Migrations are explicit, one-way, and non-destructive:
-  `configctl profile migrate <name> --to <version>` writes a new bundle and
-  keeps a copy of the original. No silent in-place interpretation.
-- Extension keys (`x-*`) are allowed only at top level and inside known tables;
-  they are preserved on read and never interpreted.
+  error: `unsupported profile schema_version 3 (this build supports 1 and 2)`.
+- Migration is explicit and one-way (v1 → v2):
+  `configctl profile migrate <name> --to 2` rewrites `profile.toml`
+  (other bundle files are untouched) only after the migrated profile
+  validates — validate-after-migrate, fail-closed — and stamps
+  `provenance.migrated_from = 1`. Already-v2 bundles are a no-op. There is no
+  silent in-place reinterpretation on load.
+- Extension keys (`x-*`) are reserved as a future namespace but are **not
+  accepted today**: unknown keys are rejected everywhere by
+  `deny_unknown_fields`.
 
 ---
 

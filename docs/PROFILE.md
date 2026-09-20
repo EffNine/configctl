@@ -1,12 +1,14 @@
 # PROFILE.md — P2 declarative profile format (implemented)
 
-Status: **Implemented in P2.** This document describes the profile bundle that
-`configctl capture` generates. It refines the P0 draft in
-`docs/PROFILE_SCHEMA.md` (which remains the long-term direction); where the
-two differ, this document is authoritative for the current implementation.
+Status: **Implemented in P2; extended by schema v2 in v1.1.** This document
+describes the v1 profile bundle that `configctl capture` produced up to
+`v1.0.0-rc.1`. Since v1.1, capture emits schema v2, and
+`docs/PROFILE_SCHEMA.md` (§2.7) is authoritative for the current bundle; where
+the two differ, `PROFILE_SCHEMA.md` wins.
 
-Format: **TOML**. Every file declares `schema_version = 1`. Unknown keys are
-rejected (`deny_unknown_fields`). Extension keys (`x-*`) are deferred to P3+.
+Format: **TOML**. Every file declares `schema_version` (`1` as documented
+here; v1.1 capture emits `2`). Unknown keys are rejected
+(`deny_unknown_fields`), including `x-*` (reserved, not yet accepted).
 
 ---
 

@@ -4,7 +4,8 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.0.0-rc.1.** The full lifecycle is implemented:
+**Status: v1.0.0-rc.1 released; `main` tracks `1.1.0-dev` (hardcore mapping).**
+The full lifecycle is implemented:
 
 ```console
 $ configctl scan ~/projects          # read-only discovery
@@ -15,11 +16,24 @@ $ configctl apply <plan-id> --yes    # journaled, locked, atomic, backed up
 $ configctl verify ./work            # MATCH / DRIFT / MISSING / ...
 $ configctl rollback --plan <plan-id> --yes   # restore from backups
 $ configctl doctor                   # state + interrupted-apply diagnostics
+$ configctl guide [topic]            # plain-language help while you work
 ```
 
 Local-first, offline-capable, no accounts, no telemetry, no cloud dependency.
 Secrets are referenced (`secret://…`) and stored in the Linux Secret Service
 — never written into profiles, logs, diffs, plans, or state.
+
+### v1.1 direction — hardcore mapping
+
+v1.1 inverts the default from "not allowlisted → exclude" to "discover
+broadly → classify with evidence → capture what is reproducible → reference
+secrets → record the rest". Safety comes from a single `ResourceGovernor`
+(wall time, CPU pressure, memory, I/O, files, directory entries,
+subprocesses, output, recursion, symlink depth, concurrency) rather than
+conservative discovery; execution stays gated by per-operation
+`PlanActionClass` — `PRIVILEGED`, `DESTRUCTIVE`, and `UNSUPPORTED` operations
+are refused by `apply` even after approval. Capture emits profile schema v2;
+v1 bundles keep loading. See [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md).
 
 ## Documentation
 
@@ -44,6 +58,11 @@ Secrets are referenced (`secret://…`) and stored in the Linux Secret Service
 | [docs/STATE.md](docs/STATE.md) | State directory layout and SQLite schema |
 | [docs/SECURITY.md](docs/SECURITY.md) | Security guarantees and honest limitations |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations and deferred features |
+| [docs/ENV_CONSOLIDATION.md](docs/ENV_CONSOLIDATION.md) | Env consolidation design (proposed v1.2): sources, canonical file, include lines, beginner guide |
+| [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md) | v1.1 direction: hardcore discovery, governance, execution classes |
+| [docs/RESOURCE_GOVERNOR.md](docs/RESOURCE_GOVERNOR.md) | v1.1 execution budgets: defaults, ceilings, CLI overrides |
+| [docs/RESOURCE_CLASSIFICATION.md](docs/RESOURCE_CLASSIFICATION.md) | v1.1 classification: classes, evidence, capture actions |
+| [docs/DISCOVERY_MODEL.md](docs/DISCOVERY_MODEL.md) | v1.1 discovery pipeline: mounts, walk, probes, completeness |
 
 ## Build and test
 

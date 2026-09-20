@@ -1,6 +1,6 @@
 # DISCOVERY.md — P1 read-only discovery engine
 
-Status: **Implemented in P1.** This document describes the behavior of
+Status: **Implemented in P1; broadened in v1.1 (see `DISCOVERY_MODEL.md`, `RESOURCE_GOVERNOR.md`).** This document describes the behavior of
 `configctl scan`.
 
 The discovery engine establishes a factual, read-only inventory of a Linux

@@ -1,6 +1,6 @@
 # WORKSPACE_STRUCTURE.md — Repository layout
 
-Status: **Implemented (v1.0.0-rc.1).** The workspace has three crates (core, discovery, cli); provider logic lives in core modules.
+Status: **Implemented (v1.0.0-rc.1); `main` tracks `1.1.0-dev`.** The workspace has three crates (core, discovery, cli); provider logic lives in core modules.
 
 Language: Rust (edition 2021). Toolchain: stable; MSRV pinned in
 `rust-toolchain.toml` and CI (exact value decided at P1).
@@ -19,7 +19,7 @@ traits), keeping the provider→core direction without premature micro-crates.
 
 ```
 configctl/
-├── Cargo.toml                      # virtual workspace (version 1.0.0-rc.1)
+├── Cargo.toml                      # virtual workspace (version 1.1.0-dev)
 ├── Cargo.lock                      # committed
 ├── rust-toolchain.toml             # pinned stable toolchain (1.97)
 ├── README.md
@@ -32,6 +32,8 @@ configctl/
 │   │   ├── src/commands/           # scan/capture/plan/apply/verify/env/
 │   │   │                           # secrets/audit/rollback/doctor/init/profile
 │   │   ├── src/render.rs           # P0 JSON envelope
+│   │   ├── src/guidance.rs         # guide topics, --explain notes, hints
+│   │   ├── src/guide/              # plain-language topic texts (*.md)
 │   │   └── tests/                  # *_e2e CLI suites (disposable fixtures)
 │   ├── configctl-core/             # domain; NO provider-crate deps
 │   │   └── src/
@@ -45,6 +47,10 @@ configctl/
 │   │       ├── env_verify.rs       # schema verification
 │   │       ├── backup.rs / lock.rs # CAS backups, flock
 │   │       ├── command.rs          # CommandRunner (only subprocess path)
+│   │       ├── governor.rs         # v1.1: central resource budgets
+│   │       ├── inventory.rs        # v1.1: resource inventory model
+│   │       ├── classify.rs         # v1.1: classes + PlanActionClass
+│   │       ├── capture_policy.rs   # v1.1: capture action decisions
 │   │       ├── hash.rs             # canonical SHA-256
 │   │       └── redact.rs / envfile.rs / paths.rs / files.rs / ...
 │   └── configctl-discovery/        # bounded walkers, detectors, scanner
@@ -105,7 +111,7 @@ Matrix: Linux x86_64. MSRV 1.97 (pinned toolchain in `rust-toolchain.toml`).
 ## 6. Versioning
 
 - Workspace crates share one version; the binary reports it via
-  `configctl --version` (`configctl 1.0.0-rc.1`).
+  `configctl --version` (`configctl 1.1.0-dev`).
 - `schema_version` values (profile/config/JSON output) are independent of the
   crate version and only bump on breaking format changes, with documented
   migration.

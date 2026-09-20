@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1).** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting.** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -23,6 +23,7 @@ configctl [GLOBAL OPTIONS] <COMMAND> [ARGS]
 | `--no-color` | Disable ANSI color (also honors `NO_COLOR`). |
 | `-y, --yes` | Approve the current plan non-interactively. Only meaningful for mutating commands. |
 | `--dry-run` | Perform all reads and checks, produce all output, change nothing. Never prompts. |
+| `--explain` | Add a short plain-language "what this means" note to human output. Ignored in `--json` mode. |
 | `-h, --help` / `-V, --version` | Standard. |
 
 ### 1.1 Exit codes (stable contract)
@@ -50,6 +51,21 @@ configctl [GLOBAL OPTIONS] <COMMAND> [ARGS]
 - `--dry-run` is accepted by mutating commands and always short-circuits
   before any write.
 - Secrets are never accepted as command-line arguments.
+
+### 1.3 Guidance (`guide`, `--explain`, hints)
+
+- `configctl guide [topic]` prints plain-language help while you work.
+  Topics: `start`, `scan`, `capture`, `profile`, `plan`, `apply`, `verify`,
+  `rollback`, `env`, `secrets`, `audit`, `doctor`, `exit-codes`, `glossary`.
+- `--explain` appends a short "what this means" note to human output. It is
+  ignored in `--json` mode; machine output never carries guidance.
+- After successful commands, a one-line next-step hint may print to stderr.
+  Hints are TTY-only, at most once per topic per 24 h, never in `--json` or
+  `--quiet` mode, and disabled entirely with `CONFIGCTL_NO_HINTS=1`.
+- On failure, a plain-language interpretation of the exit code is printed to
+  stderr (`what this means: …`). Errors are never suppressed.
+- Guidance never changes command behavior and never writes to the machine; the
+  only side effect is a rate-limit timestamp in `<state-dir>/ux.json` (0600).
 
 ---
 
@@ -217,25 +233,28 @@ Human output:
 PLAN work
 
 Packages:
-  + ripgrep
-  + jq
-  + tmux
+  + package ripgrep: install via apt [SAFE_REPRODUCE]
+  + package jq: install via apt [SAFE_REPRODUCE]
 
 Files:
-  ~ ~/.gitconfig
-  + ~/.config/nvim/init.lua
+  ~ file ~/.gitconfig: update managed file [SAFE_REPRODUCE]
+  + file ~/.config/nvim/init.lua: create from bundle [SAFE_REPRODUCE]
 
 Environment:
-  + EDITOR=nvim
+  + env EDITOR: set literal in managed env file [SAFE_REPRODUCE]
 
 Services:
-  docker -> enable, start
+  + service docker.service: enable [SAFE_REPRODUCE]
 
-3 conflicts:
-  ! ~/.config/nvim exists and is not managed (use --adopt to take ownership)
-  ! plan is missing secret ref secret://work/dev/github/GITHUB_TOKEN
+1 conflict(s):
+  ! ~/.config/nvim: file ~/.config/nvim exists and is not managed (use --adopt to take ownership)
 
-No changes made. Run `configctl apply work` to execute this plan (id: 01J...).
+warnings:
+  ! [missing_secret_ref] plan is missing secret ref secret://work/dev/github/GITHUB_TOKEN
+
+plan id: 01J8Z6…
+plan hash: 3f9a…
+No changes made. Run `configctl apply 01J8Z6…` to execute this plan.
 ```
 
 ### 2.6 `configctl apply`
@@ -452,6 +471,32 @@ Configctl state       OK  (last integrity check: pass)
 Profile               work
 Last verification     PASS (2h ago)
 Interrupted apply     none
+```
+
+### 2.13 `configctl guide`
+
+```
+configctl guide [TOPIC]
+```
+
+Plain-language help while you work: what a command does, when to use it, what
+it touches, common confusion, and the next step. Omitting `TOPIC` lists every
+topic. Unknown topics are a usage error (exit 2) that names the valid ones.
+
+Read-only: never touches the machine and never writes state.
+
+```
+$ configctl guide plan
+# plan — see exactly what would change
+…
+
+$ configctl guide
+configctl guide — plain-language help
+
+Topics:
+  start       What configctl is and where to begin
+  scan        Read-only discovery: what lives where
+  …
 ```
 
 ---

@@ -1,6 +1,6 @@
 # THREAT_MODEL.md — configctl
 
-Status: **Implemented (v1.0.0-rc.1).** Dispositions for every threat are recorded in §7a with evidence.
+Status: **Implemented (v1.0.0-rc.1).** Dispositions for every threat are recorded in §7a with evidence. v1.1 broadens discovery under central `ResourceGovernor` budgets and gates execution by `PlanActionClass`; the register below remains the v1.0 baseline (see `V1_1_HARDCORE.md`, `RESOURCE_GOVERNOR.md`).
 
 Method: asset-driven threat model with STRIDE-style classification per
 component, plus an explicit threat register (T-IDs) that maps to the safety

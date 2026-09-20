@@ -1,6 +1,6 @@
 # TESTING_STRATEGY.md — Testing and verification strategy
 
-Status: **Implemented (v1.0.0-rc.1).** Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `cargo build --release`, plus canary/attack/fuzz/idempotency/E2E suites.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds stress/bench suites (discovery `stress.rs`, `bench.rs`).** Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `cargo build --release`, plus canary/attack/fuzz/idempotency/E2E suites.
 
 Because `configctl` modifies developer machines and handles secrets, testing is
 a first-class requirement, not an afterthought. Every safety claim in
