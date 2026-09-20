@@ -250,7 +250,9 @@ pub fn observe_file(abs: &Path) -> FileObs {
             len: Some(meta.len()),
         };
     }
-    let hash = std::fs::read(abs).ok().map(|b| crate::hash::sha256_hex(&b));
+    let hash = std::fs::read(abs)
+        .ok()
+        .map(|b| crate::hash::file_content_hash(&b));
     FileObs {
         exists: true,
         is_symlink: false,

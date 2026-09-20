@@ -11,8 +11,8 @@ backed up: configctl manages references, and managed files are dotfiles.
 
 | Resource | Rollback |
 |---|---|
-| Files (`FileCreate`/`FileUpdate`) | `ROLLBACK_SUPPORTED` — atomic restore, or removal of a created file when current content still matches. |
-| Managed env literals | `ROLLBACK_SUPPORTED` — whole-file restore from backup. |
+| Files (`FileCreate`/`FileUpdate`) | `ROLLBACK_SUPPORTED` — atomic restore, or removal of a created file when current content still matches. A restore/removal happens only when the target still holds exactly what apply wrote (file-content identity vs `desired_after`); any divergence refuses fail-closed. |
+| Managed env literals | `ROLLBACK_SUPPORTED` — whole-file restore from backup, or removal of a created env file when it still exactly matches what apply wrote. Guards compare literal values value-vs-value plus whole-file key/value equality against the pre-apply backup (never a value hash against a file-content hash); any divergence refuses fail-closed. |
 | Packages | `ROLLBACK_UNSUPPORTED` — report-only; v1 never auto-removes or downgrades (manual `apt remove` printed). |
 | Services, git | `ROLLBACK_PARTIAL` — prior states are not snapshotted; reported for manual verification. |
 

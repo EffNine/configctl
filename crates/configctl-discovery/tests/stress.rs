@@ -211,7 +211,7 @@ fn hostile_filenames_do_not_break_or_escape() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("evil\nnewline.env"), b"A=1\n").unwrap();
     std::fs::write(tmp.path().join("ünïcodé_ß.env"), b"B=2\n").unwrap();
-    std::fs::write(tmp.path().join(&"x".repeat(200)), b"C=3\n").unwrap();
+    std::fs::write(tmp.path().join("x".repeat(200)), b"C=3\n").unwrap();
     std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
     let result = timed("hostile names", Duration::from_secs(30), || {
         scan_default(tmp.path())

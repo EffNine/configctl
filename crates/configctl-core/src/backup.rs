@@ -25,7 +25,7 @@ fn object_path(state_dir: &std::path::Path, sha: &str) -> std::path::PathBuf {
 
 /// Store content, returning its sha256. Idempotent: existing objects are kept.
 pub fn put(state_dir: &std::path::Path, content: &[u8]) -> Result<String, String> {
-    let sha = crate::hash::sha256_hex(content);
+    let sha = crate::hash::file_content_hash(content);
     let dest = object_path(state_dir, &sha);
     if dest.exists() {
         return Ok(sha);

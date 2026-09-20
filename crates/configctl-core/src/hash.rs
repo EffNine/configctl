@@ -15,6 +15,32 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(h.finalize())
 }
 
+/// Canonical file-content identity: SHA-256 over the exact file bytes.
+///
+/// This is the ONLY hash that may be compared against observed file content
+/// (`observe_file().content_hash`), plan `desired_after` for file ops, apply
+/// postchecks, rollback guards, and verify/drift checks. All of those stages
+/// hash the same canonical byte representation (the whole file, byte for
+/// byte), so the comparison is like-for-like.
+///
+/// Never compare a file-content hash against a value-domain hash (e.g. an
+/// env literal hash): different byte strings hash differently even under the
+/// same algorithm, so a cross-domain comparison fails closed (always unequal)
+/// and breaks legitimate rollback. See `env_value_hash` for the value domain.
+pub fn file_content_hash(bytes: &[u8]) -> String {
+    sha256_hex(bytes)
+}
+
+/// Canonical environment-literal identity: SHA-256 over the exact UTF-8
+/// bytes of one variable value.
+///
+/// Value-domain only: compare literal-vs-literal (plan `desired_after` for
+/// env ops, apply postchecks, rollback value guards). Never compare against
+/// a file-content hash (see `file_content_hash`).
+pub fn env_value_hash(value: &str) -> String {
+    sha256_hex(value.as_bytes())
+}
+
 /// SHA-256 hex of a UTF-8 string.
 pub fn sha256_str(s: &str) -> String {
     sha256_hex(s.as_bytes())
@@ -34,5 +60,5 @@ pub fn sha256_file(path: &std::path::Path, cap: u64) -> Result<String, String> {
     if bytes.len() as u64 > cap {
         return Err(format!("file {} grew beyond cap", path.display()));
     }
-    Ok(sha256_hex(&bytes))
+    Ok(file_content_hash(&bytes))
 }

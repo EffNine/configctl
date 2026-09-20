@@ -338,15 +338,15 @@ pub fn build_plan(
                         // desired literal lives in the profile bundle (user's
                         // own committed file), never duplicated here beyond
                         // the content hash. Apply re-reads the profile.
-                        details.insert("desired_hash".into(), crate::hash::sha256_str(lit));
+                        details.insert("desired_hash".into(), crate::hash::env_value_hash(lit));
                         let mut op = mk_op(
                             "env",
                             OperationKind::EnvironmentSchemaChange,
                             name,
                             format!("env {name}: set literal in managed env file"),
                             "low",
-                            cur.map(|v| crate::hash::sha256_str(v)),
-                            Some(crate::hash::sha256_str(lit)),
+                            cur.map(|v| crate::hash::env_value_hash(v)),
+                            Some(crate::hash::env_value_hash(lit)),
                             RollbackSupport::Supported,
                         );
                         op.details = details;

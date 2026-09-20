@@ -129,7 +129,7 @@ fn file_create_then_noop_is_idempotent() {
     // is refused (already applied), but a fresh plan converges.
     let st2 = {
         let mut s = ObservedState::default();
-        let h = configctl_core::hash::sha256_str("[user]\n\tname = T\n");
+        let h = configctl_core::hash::file_content_hash(b"[user]\n\tname = T\n");
         s.files.insert(
             "~/.gitconfig".into(),
             FileObs {
@@ -160,7 +160,7 @@ fn unmanaged_file_refused_without_adopt() {
             exists: true,
             is_symlink: false,
             is_non_regular: false,
-            content_hash: Some(configctl_core::hash::sha256_str("foreign\n")),
+            content_hash: Some(configctl_core::hash::file_content_hash(b"foreign\n")),
             len: Some(8),
         },
     );
@@ -200,7 +200,7 @@ fn adopt_backs_up_and_takes_ownership() {
             exists: true,
             is_symlink: false,
             is_non_regular: false,
-            content_hash: Some(configctl_core::hash::sha256_str("foreign\n")),
+            content_hash: Some(configctl_core::hash::file_content_hash(b"foreign\n")),
             len: Some(8),
         },
     );
@@ -240,7 +240,7 @@ fn toctou_guard_aborts_on_changed_file() {
         "file",
         "~/.gitconfig",
         "work",
-        Some(&configctl_core::hash::sha256_str("v1\n")),
+        Some(&configctl_core::hash::file_content_hash(b"v1\n")),
         1,
     )
     .unwrap();
@@ -252,7 +252,7 @@ fn toctou_guard_aborts_on_changed_file() {
             exists: true,
             is_symlink: false,
             is_non_regular: false,
-            content_hash: Some(configctl_core::hash::sha256_str("v1\n")),
+            content_hash: Some(configctl_core::hash::file_content_hash(b"v1\n")),
             len: Some(3),
         },
     );
@@ -549,7 +549,7 @@ fn journal_phases_are_complete_for_file_update() {
             exists: true,
             is_symlink: false,
             is_non_regular: false,
-            content_hash: Some(configctl_core::hash::sha256_str("old\n")),
+            content_hash: Some(configctl_core::hash::file_content_hash(b"old\n")),
             len: Some(4),
         },
     );

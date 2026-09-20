@@ -390,6 +390,13 @@ enum RollbackAction {
 
 /// Restore one file/env op from its backup (or remove a created file).
 /// Pure check-then-act with symlink guards; `dry_run` only checks.
+///
+/// Safety rule: a restore/removal happens only when the target still holds
+/// exactly what apply wrote. File ops compare file-content identity against
+/// `desired_after` (both are whole-file hashes); env ops compare the managed
+/// literal values (value-domain hashes) plus whole-file key/value equality
+/// against the pre-apply backup. Any divergence refuses fail-closed so
+/// rollback can never clobber external edits.
 fn rollback_file_op(
     state_dir: &Path,
     home: &Path,
@@ -421,12 +428,14 @@ fn rollback_file_op(
         Some(sha) => {
             let bytes =
                 crate::backup::get(state_dir, &sha).map_err(|e| format!("backup missing: {e}"))?;
+            // Fail closed when the target no longer holds what apply wrote.
+            guard_unchanged_since_apply(plan, op, &abs, &current, Some(&bytes))?;
             if dry_run {
                 return Ok(RollbackAction::Restored);
             }
             atomic_restore(&abs, &bytes)?;
             // Update ownership fingerprint to the restored content.
-            let fp = crate::hash::sha256_hex(&bytes);
+            let fp = crate::hash::file_content_hash(&bytes);
             let kind = if op.kind == OperationKind::EnvironmentSchemaChange {
                 "env"
             } else {
@@ -445,20 +454,119 @@ fn rollback_file_op(
         None => {
             // File was created by apply: remove only when current content
             // still matches what apply wrote (else manual).
-            match (&current.content_hash, &op.desired_after) {
-                (Some(cur), Some(want)) if cur == want => {
-                    if dry_run {
-                        return Ok(RollbackAction::Removed);
-                    }
-                    std::fs::remove_file(&abs)
-                        .map_err(|e| format!("remove created file: {e:?}"))?;
-                    Ok(RollbackAction::Removed)
-                }
-                (None, _) if !current.exists => Ok(RollbackAction::Noop),
-                _ => Err("created file changed since apply; manual recovery required".into()),
+            if !current.exists {
+                return Ok(RollbackAction::Noop);
+            }
+            guard_unchanged_since_apply(plan, op, &abs, &current, None)?;
+            if dry_run {
+                return Ok(RollbackAction::Removed);
+            }
+            std::fs::remove_file(&abs).map_err(|e| format!("remove created file: {e:?}"))?;
+            Ok(RollbackAction::Removed)
+        }
+    }
+}
+
+/// Refuse unless the target still holds exactly what apply wrote.
+///
+/// - File ops: `desired_after` is a file-content hash and
+///   `observe_file().content_hash` uses the same canonical representation
+///   (`hash::file_content_hash`), so the comparison is like-for-like.
+/// - Env ops: `desired_after` is a *value* hash, which must never be compared
+///   against a file-content hash. Compare value-vs-value for every managed
+///   literal in the plan, and additionally require whole-file equality with
+///   the pre-apply state (`backup_bytes`, or the empty map when apply created
+///   the file) so added/removed/altered unmanaged entries also refuse.
+///
+/// Error strings name targets only — never values or hashes.
+fn guard_unchanged_since_apply(
+    plan: &Plan,
+    op: &Operation,
+    abs: &Path,
+    current: &observe::FileObs,
+    backup_bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    const REFUSE: &str = "changed since apply; manual recovery required";
+    if op.kind == OperationKind::EnvironmentSchemaChange {
+        return guard_env_unchanged(plan, op, abs, backup_bytes);
+    }
+    match (&current.content_hash, &op.desired_after) {
+        (Some(cur), Some(want)) if cur == want => Ok(()),
+        _ => Err(REFUSE.into()),
+    }
+}
+
+/// Env-op divergence guard (see `guard_unchanged_since_apply`).
+fn guard_env_unchanged(
+    plan: &Plan,
+    op: &Operation,
+    abs: &Path,
+    backup_bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    const REFUSE: &str = "managed env file changed since apply; manual recovery required";
+    // Managed desires from this plan: VAR -> desired value hash (value domain).
+    let mut managed: BTreeMap<String, String> = BTreeMap::new();
+    for o in &plan.operations {
+        if o.kind == OperationKind::EnvironmentSchemaChange {
+            if let Some(h) = &o.desired_after {
+                managed.insert(o.target.clone(), h.clone());
             }
         }
     }
+    // The op under rollback must carry its own desired state; without it
+    // there is nothing trustworthy to compare against.
+    let want_self = op
+        .desired_after
+        .as_ref()
+        .ok_or_else(|| REFUSE.to_string())?;
+    if !managed.contains_key(&op.target) {
+        return Err(REFUSE.into());
+    }
+    let current_bytes = std::fs::read(abs).map_err(|_| REFUSE.to_string())?;
+    let current_map =
+        crate::apply::parse_env_bytes(&current_bytes).ok_or_else(|| REFUSE.to_string())?;
+    // (a) Every managed literal must still hold exactly its desired value.
+    // Value hash vs value hash — like-for-like within the value domain.
+    for (var, want) in &managed {
+        match current_map.get(var) {
+            Some(cur) if crate::hash::env_value_hash(cur) == *want => {}
+            _ => return Err(REFUSE.into()),
+        }
+    }
+    // The op's own target is covered by the loop above; double-check it
+    // directly so a plan that somehow omits it still fails closed.
+    match current_map.get(&op.target) {
+        Some(cur) if crate::hash::env_value_hash(cur) == *want_self => {}
+        _ => return Err(REFUSE.into()),
+    }
+    // (b) Whole-file equality: current must equal pre-apply plus managed
+    // desires, so externally added/removed/altered entries also refuse.
+    let mut expected_keys: BTreeMap<String, Option<String>> = BTreeMap::new();
+    match backup_bytes {
+        Some(bytes) => {
+            let before = crate::apply::parse_env_bytes(bytes).ok_or_else(|| REFUSE.to_string())?;
+            for (k, v) in &before {
+                expected_keys.insert(k.clone(), Some(v.clone()));
+            }
+        }
+        None => {
+            // Apply created the file: no pre-existing entries may remain.
+        }
+    }
+    for var in managed.keys() {
+        expected_keys.insert(var.clone(), None);
+    }
+    if current_map.len() != expected_keys.len() {
+        return Err(REFUSE.into());
+    }
+    for (key, before_value) in &expected_keys {
+        match (current_map.get(key), before_value) {
+            (Some(_), None) => {} // Managed key: value already checked in (a).
+            (Some(cur), Some(before)) if cur == before => {}
+            _ => return Err(REFUSE.into()),
+        }
+    }
+    Ok(())
 }
 
 /// Atomically replace `abs` with `bytes` (temp + rename, symlink-guarded).
@@ -517,6 +625,25 @@ pub fn rollback_target(
                 .and_then(|e| e.backup_sha.clone());
             let Some(sha) = backup else { continue };
             let bytes = crate::backup::get(state_dir, &sha).map_err(RollbackError::Internal)?;
+            // Fail closed when the target no longer holds what apply wrote.
+            // Both sides are canonical file-content identities
+            // (`hash::file_content_hash` hex digests), so string equality is
+            // the like-for-like comparison. Targeted rollback only handles
+            // file ops, whose `desired_after` is always file-domain.
+            let current = observe::observe_file(&abs);
+            if current.is_symlink {
+                return Err(RollbackError::Conflict(
+                    "symlink at target; refusing".into(),
+                ));
+            }
+            match (&current.content_hash, &op.desired_after) {
+                (Some(cur), Some(want)) if cur == want => {}
+                _ => {
+                    return Err(RollbackError::Conflict(format!(
+                        "cannot roll back {target:?}: changed since apply; manual recovery required"
+                    )));
+                }
+            }
             if dry_run {
                 return Ok(RollbackReport {
                     plan_id,
@@ -526,7 +653,7 @@ pub fn rollback_target(
             }
             let _lock = crate::lock::acquire(state_dir).map_err(RollbackError::Conflict)?;
             atomic_restore(&abs, &bytes).map_err(RollbackError::Conflict)?;
-            let fp = crate::hash::sha256_hex(&bytes);
+            let fp = crate::hash::file_content_hash(&bytes);
             let _ = crate::state::record_owned(
                 state_dir,
                 "file",

@@ -232,6 +232,58 @@ fn cmd_out(stdout: &str) -> configctl_core::command::CommandOutput {
     }
 }
 
+fn setup_env(
+    vars: &[(&str, &str)],
+) -> (
+    EnvGuard,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let g = EnvGuard::lock();
+    std::env::remove_var("CONFIGCTL_FAIL_AFTER");
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let bundle = tmp.path().join("work");
+    let state = tmp.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&bundle).unwrap();
+    let mut env_toml = String::new();
+    for (k, v) in vars {
+        env_toml.push_str(&format!("{k} = \"{v}\"\n"));
+    }
+    std::fs::write(
+        bundle.join("profile.toml"),
+        format!("schema_version = 1\nname = \"work\"\n\n[environment]\n{env_toml}"),
+    )
+    .unwrap();
+    (g, tmp, home, bundle, state)
+}
+
+fn managed_env(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".config/environment.d/90-configctl.conf")
+}
+
+fn rollback_now(
+    plan_id: &str,
+    home: &std::path::Path,
+    state: &std::path::Path,
+    runner: &FakeCommandRunner,
+) -> configctl_cli::commands::rollback::RollbackOutput {
+    rollback_cmd::run_rollback(
+        Some(plan_id),
+        None,
+        false,
+        Some(state.to_str().unwrap()),
+        Some(home),
+        true,
+        false,
+        false,
+        runner,
+    )
+}
+
 #[test]
 fn targeted_rollback_restores_single_file() {
     let (_g, _tmp, home, bundle, state) = setup(&[("~/.a", "A\n"), ("~/.b", "B\n")]);
@@ -529,4 +581,155 @@ fn backup_permissions_are_owner_only() {
         content_hash: None,
         len: None,
     };
+}
+
+// ---- v1.1 rollback content-identity regressions ---- //
+// The defect: env-op `desired_after` stores a VALUE hash while rollback
+// compared it against a FILE CONTENT hash, so rollback of a configctl-created
+// managed env file always failed closed. The guards below pin the corrected
+// lifecycle: unchanged-created removes, any divergence refuses with no loss.
+
+#[test]
+fn env_created_rollback_removes_file() {
+    let (_g, _tmp, home, bundle, state) = setup_env(&[("EDITOR", "nvim")]);
+    assert!(!managed_env(&home).exists());
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "env-rb-1", &runner);
+    let text = std::fs::read_to_string(managed_env(&home)).unwrap();
+    assert!(text.contains("EDITOR=nvim"), "{text:?}");
+    let out = rollback_now("env-rb-1", &home, &state, &runner);
+    assert_eq!(
+        out.exit_code,
+        0,
+        "{:?}",
+        out.error.map(|e| rollback_cmd::error_message(&e))
+    );
+    assert!(!managed_env(&home).exists());
+    let (_, status, _) = configctl_core::state::load_plan(&state, "env-rb-1").unwrap();
+    assert_eq!(status, "rolled_back");
+}
+
+#[test]
+fn env_created_modified_value_refuses_without_loss() {
+    let (_g, _tmp, home, bundle, state) = setup_env(&[("EDITOR", "nvim")]);
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "env-rb-2", &runner);
+    // External edit after apply: change the managed value.
+    let tampered = std::fs::read_to_string(managed_env(&home))
+        .unwrap()
+        .replace("EDITOR=nvim", "EDITOR=intruder");
+    std::fs::write(managed_env(&home), &tampered).unwrap();
+    let out = rollback_now("env-rb-2", &home, &state, &runner);
+    assert_eq!(out.exit_code, 5);
+    let msg = rollback_cmd::error_message(&out.error.unwrap());
+    assert!(msg.contains("manual recovery"), "{msg:?}");
+    // Secret-safety: refusal names the target, never values.
+    assert!(!msg.contains("nvim"), "{msg:?}");
+    assert!(!msg.contains("intruder"), "{msg:?}");
+    // No data loss: the user's modified file is intact.
+    assert_eq!(
+        std::fs::read_to_string(managed_env(&home)).unwrap(),
+        tampered
+    );
+}
+
+#[test]
+fn env_created_extra_entry_refuses_without_loss() {
+    let (_g, _tmp, home, bundle, state) = setup_env(&[("EDITOR", "nvim")]);
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "env-rb-3", &runner);
+    // External edit after apply: append an unmanaged entry. The managed
+    // value still matches, but whole-file removal would destroy user data.
+    let before = std::fs::read_to_string(managed_env(&home)).unwrap();
+    let extended = format!("{before}EXTRA_USER_ENTRY=keepme\n");
+    std::fs::write(managed_env(&home), &extended).unwrap();
+    let out = rollback_now("env-rb-3", &home, &state, &runner);
+    assert_eq!(out.exit_code, 5);
+    assert_eq!(
+        std::fs::read_to_string(managed_env(&home)).unwrap(),
+        extended
+    );
+}
+
+#[test]
+fn file_created_modified_refuses_without_loss() {
+    let (_g, _tmp, home, bundle, state) = setup(&[("~/.g", "v1\n")]);
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "file-rb-1", &runner);
+    std::fs::write(home.join(".g"), "user edit\n").unwrap();
+    let out = rollback_now("file-rb-1", &home, &state, &runner);
+    assert_eq!(out.exit_code, 5);
+    assert_eq!(
+        std::fs::read_to_string(home.join(".g")).unwrap(),
+        "user edit\n"
+    );
+}
+
+#[test]
+fn file_updated_then_modified_refuses_without_loss() {
+    let (_g, _tmp, home, bundle, state) = setup(&[("~/.g", "desired\n")]);
+    std::fs::write(home.join(".g"), "original\n").unwrap();
+    configctl_core::state::ensure_state_dir(&state).unwrap();
+    configctl_core::state::record_owned(&state, "file", "~/.g", "work", None, 1).unwrap();
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "file-rb-2", &runner);
+    assert_eq!(
+        std::fs::read_to_string(home.join(".g")).unwrap(),
+        "desired\n"
+    );
+    // External modification after apply: rollback must refuse, never clobber.
+    std::fs::write(home.join(".g"), "externally changed\n").unwrap();
+    let out = rollback_now("file-rb-2", &home, &state, &runner);
+    assert_eq!(out.exit_code, 5);
+    let msg = rollback_cmd::error_message(&out.error.unwrap());
+    assert!(msg.contains("manual recovery"), "{msg:?}");
+    assert_eq!(
+        std::fs::read_to_string(home.join(".g")).unwrap(),
+        "externally changed\n"
+    );
+}
+
+#[test]
+fn env_updated_restores_exact_bytes() {
+    let (_g, _tmp, home, bundle, state) = setup_env(&[("NEWVAR", "newval")]);
+    let original = "OLDVAR=oldval\n";
+    std::fs::create_dir_all(managed_env(&home).parent().unwrap()).unwrap();
+    std::fs::write(managed_env(&home), original).unwrap();
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "env-rb-4", &runner);
+    let applied = std::fs::read_to_string(managed_env(&home)).unwrap();
+    assert!(applied.contains("NEWVAR=newval"), "{applied:?}");
+    assert!(applied.contains("OLDVAR=oldval"), "{applied:?}");
+    let out = rollback_now("env-rb-4", &home, &state, &runner);
+    assert_eq!(
+        out.exit_code,
+        0,
+        "{:?}",
+        out.error.map(|e| rollback_cmd::error_message(&e))
+    );
+    // Byte-exact restore of the pre-existing file.
+    assert_eq!(
+        std::fs::read_to_string(managed_env(&home)).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn env_updated_then_modified_refuses_without_loss() {
+    let (_g, _tmp, home, bundle, state) = setup_env(&[("NEWVAR", "newval")]);
+    std::fs::create_dir_all(managed_env(&home).parent().unwrap()).unwrap();
+    std::fs::write(managed_env(&home), "OLDVAR=oldval\n").unwrap();
+    let runner = FakeCommandRunner::new();
+    plan_and_apply(&home, &bundle, &state, "env-rb-5", &runner);
+    // External modification of the managed value after apply.
+    let tampered = std::fs::read_to_string(managed_env(&home))
+        .unwrap()
+        .replace("NEWVAR=newval", "NEWVAR=changed");
+    std::fs::write(managed_env(&home), &tampered).unwrap();
+    let out = rollback_now("env-rb-5", &home, &state, &runner);
+    assert_eq!(out.exit_code, 5);
+    assert_eq!(
+        std::fs::read_to_string(managed_env(&home)).unwrap(),
+        tampered
+    );
 }

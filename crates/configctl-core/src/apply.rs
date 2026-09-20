@@ -537,7 +537,7 @@ fn execute_file_op(
     if payload.len() > 256 * 1024 {
         return Err(ApplyError::Internal("payload exceeds cap".into()));
     }
-    let desired_hash = crate::hash::sha256_hex(&payload);
+    let desired_hash = crate::hash::file_content_hash(&payload);
 
     // PRECHECK: lstat + symlink refusal + ownership + expected-before.
     let current = observe::observe_file(&abs);
@@ -884,7 +884,7 @@ fn execute_env_op(
         "env",
         &op.target,
         &plan.profile_identity,
-        Some(&crate::hash::sha256_str(&desired)),
+        Some(&crate::hash::env_value_hash(&desired)),
         crate::state::now_secs(),
     );
     let _ = crate::state::record_history(
@@ -905,17 +905,15 @@ fn execute_env_op(
     }))
 }
 
-fn read_env_map(path: &Path) -> std::collections::BTreeMap<String, String> {
+/// Parse managed-env file bytes into a `KEY → VALUE` map.
+///
+/// Shared by apply (postchecks) and rollback (like-for-like guards) so both
+/// stages interpret the same bytes identically: first occurrence wins,
+/// comments/blanks skipped, invalid names ignored. Returns `None` when the
+/// bytes are not valid UTF-8 (fail-closed: callers must refuse, never guess).
+pub fn parse_env_bytes(bytes: &[u8]) -> Option<std::collections::BTreeMap<String, String>> {
+    let text = std::str::from_utf8(bytes).ok()?;
     let mut map = std::collections::BTreeMap::new();
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
-        return map;
-    };
-    if !meta.file_type().is_file() || meta.len() > 64 * 1024 {
-        return map;
-    }
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return map;
-    };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -928,7 +926,20 @@ fn read_env_map(path: &Path) -> std::collections::BTreeMap<String, String> {
                 .or_insert_with(|| line[eq + 1..].trim().to_string());
         }
     }
-    map
+    Some(map)
+}
+
+pub(crate) fn read_env_map(path: &Path) -> std::collections::BTreeMap<String, String> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return std::collections::BTreeMap::new();
+    };
+    if !meta.file_type().is_file() || meta.len() > 64 * 1024 {
+        return std::collections::BTreeMap::new();
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return std::collections::BTreeMap::new();
+    };
+    parse_env_bytes(&bytes).unwrap_or_default()
 }
 
 /// Service apply: `systemctl --user enable/disable` (or start/stop for running
