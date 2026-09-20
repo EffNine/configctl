@@ -200,16 +200,9 @@ pub fn apply_plan(
         ));
     }
 
-    // 5. Approval (bound to this exact plan hash — verified above).
-    if status != "approved" && !opts.yes && !approve(&plan) {
-        return Err(ApplyError::Declined(
-            "approval declined; no changes made".into(),
-        ));
-    }
-    // (dry-run never prompts: callers pass yes=true or an auto-decline; the
-    // dry-run path below runs before any write regardless.)
-
-    // 6. Dry-run: preview only.
+    // 5. Dry-run: preview only. Dry-run never prompts and never writes, so
+    //    approval is not required (CLI_SPEC §1.2/§2.6); the stale/tampered
+    //    plan checks above still apply.
     if opts.dry_run {
         let mut report = ApplyReport {
             plan_id: plan_id.into(),
@@ -229,6 +222,13 @@ pub fn apply_plan(
             report.noop.push("noop".into());
         }
         return Ok(report);
+    }
+
+    // 6. Approval (bound to this exact plan hash — verified above).
+    if status != "approved" && !opts.yes && !approve(&plan) {
+        return Err(ApplyError::Declined(
+            "approval declined; no changes made".into(),
+        ));
     }
 
     // 7. Record approval + global lock + applying state.
