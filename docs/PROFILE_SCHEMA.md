@@ -1,6 +1,9 @@
-# PROFILE_SCHEMA.md — Profile format v1 (draft)
+# PROFILE_SCHEMA.md — Profile format v1
 
-Status: **P0 draft. No implementation exists yet. Format is not frozen.**
+Status: **Implemented (v1.0.0-rc.1).** This document describes actual
+behavior. Collections use TOML **array-of-tables** form (`[[files]]`,
+`[[services]]`, `[[variables]]`); map forms such as
+`[files."~/.gitconfig"]` are rejected by validation (fail closed).
 
 This document defines the profile bundle format that `configctl capture`
 produces and `configctl plan/apply/verify` consumes.
@@ -65,15 +68,17 @@ apt = [
 
 # ---------------------------------------------------------------------------
 # Managed files and directories
-# Each key is the absolute target path ("~/" is expanded to $HOME at plan time).
-# Values are tables with a required `source`.
+# Array form: each entry declares its absolute target ("~/" expanded to
+# $HOME at plan time) and bundle-relative source.
 # ---------------------------------------------------------------------------
-[files."~/.gitconfig"]
+[[files]]
+target = "~/.gitconfig"
 source = "files/gitconfig"
 
-[files."~/.config/nvim"]
+[[files]]
+target = "~/.config/nvim"
 source = "files/nvim"
-mode = "0755"                   # optional; default preserved/dir 0755, file 0644
+mode = "0755"                   # optional; default file 0644
 
 # ---------------------------------------------------------------------------
 # Environment variables (non-secret literals, or secret references)
@@ -88,7 +93,8 @@ DATABASE_URL = { secret = "secret://work/dev/DATABASE_URL", required = true }
 # ---------------------------------------------------------------------------
 # systemd --user services (user units only in v1.0)
 # ---------------------------------------------------------------------------
-[services.docker]
+[[services]]
+name = "docker.service"
 enabled = true
 running = true                  # optional; default: leave running state alone
 
@@ -124,14 +130,13 @@ env_files = [".env", ".env.local", ".env.test"]   # optional; default: all disco
 Unknown package-manager keys (`dnf`, `pacman`, …) are rejected in schema v1 —
 they are deferred features, and accepting-and-ignoring them would be dishonest.
 
-### 2.3 `[files]`
+### 2.3 `[[files]]`
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
+| `target` | string | yes | `~/...` target; see rules below. |
 | `source` | string | yes | Relative path inside the bundle; must exist and stay inside the bundle. |
 | `mode` | string | no | Octal string (`"0644"`). Applied on create; on modification the existing mode is preserved unless specified. |
-| `owner` | string | no | **Reserved, rejected in v1** (would require privilege). |
-| `backup` | boolean | no | Default `true`. `false` requires explicit user confirmation at plan time and is marked high risk. |
 
 Target path rules:
 
@@ -155,7 +160,7 @@ LOG_LEVEL = "debug"
 | Field | Type | Required | Rules |
 |---|---|---|---|
 | `secret` | string | one of | Must parse as `secret://<namespace>/<path>`. |
-| `required` | boolean | no | Default `true`. `false` allows a missing secret in non-strict verification. |
+| `required` | boolean | no | Default `false`. `true` makes a missing secret a blocking plan conflict / verification `MISSING`. |
 
 Rules:
 
@@ -169,10 +174,11 @@ Rules:
   exists in the secret backend and record ownership of the reference. It does
   **not** write or export the value anywhere (see ARCHITECTURE.md §10, D11).
 
-### 2.5 `[services.<unit>]`
+### 2.5 `[[services]]`
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
+| `name` | string | yes | Unit name (`[A-Za-z0-9:_.@-]+\.service`; v1 restricts to `.service` user units). |
 | `enabled` | boolean | no | Enable/disable at boot for `systemd --user`. |
 | `running` | boolean | no | Start/stop now; omitted means "do not manage running state". |
 
@@ -240,36 +246,37 @@ schema_version = 1
 [project]
 name = "conductor"
 
-[variables.DATABASE_URL]
+[[variables]]
+name = "DATABASE_URL"
 type = "string"
 secret = true
 required = true
 
-[variables.PORT]
+[[variables]]
+name = "PORT"
 type = "integer"
 required = false
-default = 3000
 
-[variables.NODE_ENV]
+[[variables]]
+name = "NODE_ENV"
 type = "enum"
 values = ["development", "test", "production"]
 
-[variables.DEBUG]
+[[variables]]
+name = "DEBUG"
 type = "boolean"
-default = false
 ```
 
 ### 4.1 Variable fields
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
+| `name` | string | yes | Variable name (`[A-Za-z_][A-Za-z0-9_]*`). |
 | `type` | string | yes | One of `string`, `integer`, `boolean`, `enum`. |
-| `secret` | boolean | no | Default `false`. `true` means values are expected to be secret-classified; a **literal** value in a discovered file is reported, and the key must be present in `secrets.manifest.toml` when `required = true`. |
-| `required` | boolean | no | Default `false` for schema entries; missing required variables produce `MISSING`. |
-| `default` | depends on `type` | no | Must type-check against `type`. |
-| `values` | array of strings | for `enum` | Non-empty, unique. |
+| `secret` | boolean | no | Default `false`. |
+| `required` | boolean | no | Default `false`; missing required variables produce `MISSING`. |
+| `values` | array of strings | for `enum` | Non-empty, unique; only valid for `enum`. |
 | `description` | string | no | Free text, ≤ 512 chars. |
-| `pattern` | string | no | **Reserved, rejected in v1** (regex engine and safety not yet designed). |
 
 ### 4.2 Validation behavior (`configctl env verify`)
 
@@ -348,18 +355,21 @@ description = "Work laptop base environment"
 [packages]
 apt = ["git", "curl", "ripgrep", "jq", "tmux", "neovim"]
 
-[files."~/.gitconfig"]
+[[files]]
+target = "~/.gitconfig"
 source = "files/gitconfig"
 
-[files."~/.config/nvim"]
+[[files]]
+target = "~/.config/nvim"
 source = "files/nvim"
 
 [environment]
 EDITOR = "nvim"
 LANG = "en_US.UTF-8"
-GITHUB_TOKEN = { secret = "secret://work/dev/github/GITHUB_TOKEN" }
+GITHUB_TOKEN = { secret = "secret://work/dev/github/GITHUB_TOKEN", required = true }
 
-[services.docker]
+[[services]]
+name = "docker.service"
 enabled = true
 running = true
 
@@ -376,11 +386,12 @@ schema_version = 1
 [project]
 name = "conductor"
 
-[variables.PORT]
+[[variables]]
+name = "PORT"
 type = "integer"
-default = 3000
 
-[variables.AGNES_API_KEY]
+[[variables]]
+name = "AGNES_API_KEY"
 type = "string"
 secret = true
 required = true

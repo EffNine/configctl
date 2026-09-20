@@ -1,6 +1,6 @@
 # THREAT_MODEL.md — configctl
 
-Status: **P0 draft. No implementation exists yet.**
+Status: **Implemented (v1.0.0-rc.1).** Dispositions for every threat are recorded in §7a with evidence.
 
 Method: asset-driven threat model with STRIDE-style classification per
 component, plus an explicit threat register (T-IDs) that maps to the safety
@@ -214,6 +214,33 @@ or printing anything outside its declared scope.
 | T18 | Audit misreports safety (false negative on tracked `.env`) | Conservative checks; report uncertainty; `git` required | Medium — heuristic | Audit fixture tests |
 | T19 | Supply-chain compromise of dependencies | Minimal dependency set; `cargo-deny` advisories/licenses; review before adding | Medium | CI |
 | T20 | Interrupted apply leaves unknown state | Journaled INTENT/DONE; `doctor` detects; rollback restores | Medium — packages non-transactional | Failpoint integration tests |
+
+---
+
+## 7a. v1.0.0-rc.1 dispositions (with evidence)
+
+| ID | Disposition | Evidence |
+|---|---|---|
+| T1 | MITIGATED | Type-level `SecretValue`, registry+pattern redaction at all sinks; `canary_e2e.rs` asserts absence across scan/capture/plan/apply/verify/env/secrets/rollback/errors/JSON/verbose + state-dir byte scan. Residual: unknown formats rely on registry layer. |
+| T2 | MITIGATED | Capture emits refs only; validation rejects secret-like literals; post-write leak check; `capture` + canary tests. |
+| T3 | MITIGATED | Static error templates, no value interpolation; error-path canary assertions. |
+| T4 | MITIGATED | Bundle containment + `..`/absolute/symlink rejection at load; `fuzz_profile.rs`, attack suite. |
+| T5 | MITIGATED | Targets must be `~/...`, expanded against `$HOME` and re-checked at apply; traversal rejected in validation. |
+| T6 | MITIGATED | `lstat`/`O_NOFOLLOW` discipline, parent-component checks at precheck and pre-write; `filesystem_attack.rs` (incl. a parent-symlink create that was caught and fixed in P8). |
+| T7 | MITIGATED (partial) | `expected_before` prechecks + atomic rename narrow the window; TOCTOU abort tests. Tiny race remains for non-atomic provider ops — documented. |
+| T8 | MITIGATED | `flock` single-instance lock for apply/rollback; contention test. |
+| T9 | MITIGATED | Plan hash + profile/state binding verified at apply; tamper/staleness tests. |
+| T10 | MITIGATED | argv values refused (exit 2); hidden prompt / `--stdin` only; test. |
+| T11 | PARTIALLY MITIGATED | `--show` needs TTY or `--force` + stderr warning; `--show --json` refused. A user can still force output — documented, accepted. |
+| T12 | MITIGATED | Plan/state store hashes of redacted structural forms and content hashes of non-secret dotfiles; no brute-forceable secret hashes by design (values never hashed). |
+| T13 | ACCEPTED | Backups `0600` in a `0700` dir; secret-bearing files excluded from capture; unencrypted backups documented in SECURITY.md/LIMITATIONS.md. |
+| T14 | MITIGATED | Pure bounded `.env` parser (no expansion/interpolation/exec); fuzz tests. |
+| T15 | MITIGATED | Size/depth/finding caps, deny-list, subprocess timeouts+caps; oversized/broad fixtures tested. |
+| T16 | MITIGATED | Strict grammars (package/unit/env/secret-ref), argv arrays, no shell; argv-construction tests. |
+| T17 | PARTIALLY MITIGATED | Plan-visible ops + approval binding + user-services-only scope; a user can still approve a malicious profile — approval UX groups destructive ops. Documented. |
+| T18 | PARTIALLY MITIGATED | Conservative read-only checks with confidence labels; fixture tests. Heuristics documented as non-guarantees. |
+| T19 | MITIGATED (procedural) | Minimal deps (rusqlite/sha2/hex/fs2/rpassword + existing); `cargo audit` clean at RC (see P8 report); no build scripts in new deps. |
+| T20 | MITIGATED | Full phase journal + backups + explicit recovery classification; failpoint tests for every phase; `doctor` surfaces state. Packages inherently non-transactional — documented. |
 
 ---
 

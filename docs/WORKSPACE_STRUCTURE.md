@@ -1,6 +1,6 @@
 # WORKSPACE_STRUCTURE.md — Repository layout
 
-Status: **P0 design draft. No code or scaffolding exists yet.**
+Status: **Implemented (v1.0.0-rc.1).** The workspace has three crates (core, discovery, cli); provider logic lives in core modules.
 
 Language: Rust (edition 2021). Toolchain: stable; MSRV pinned in
 `rust-toolchain.toml` and CI (exact value decided at P1).
@@ -10,153 +10,115 @@ Language: Rust (edition 2021). Toolchain: stable; MSRV pinned in
 
 ---
 
-## 1. Proposed tree
+## 1. Actual tree (v1.0.0-rc.1)
+
+The workspace was built with **three crates**, not nine: provider logic lives
+in focused `configctl-core` modules (files/apt/systemd/env/secrets/audit as
+`apply`/`observe`/`rollback`/`secrets`/`verify` code paths behind narrow
+traits), keeping the provider→core direction without premature micro-crates.
 
 ```
 configctl/
-├── Cargo.toml                      # virtual workspace manifest
-├── Cargo.lock                      # committed (binary project)
-├── rust-toolchain.toml             # pinned stable toolchain
+├── Cargo.toml                      # virtual workspace (version 1.0.0-rc.1)
+├── Cargo.lock                      # committed
+├── rust-toolchain.toml             # pinned stable toolchain (1.97)
 ├── README.md
-├── LICENSE-MIT / LICENSE-APACHE    # pending license decision
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── PROFILE_SCHEMA.md
-│   ├── THREAT_MODEL.md
-│   ├── CLI_SPEC.md
-│   ├── PROVIDER_INTERFACES.md
-│   ├── WORKSPACE_STRUCTURE.md
-│   ├── TESTING_STRATEGY.md
-│   └── DEFERRED_FEATURES.md
+├── LICENSE-MIT / LICENSE-APACHE
+├── docs/                           # …plus PLANNING/APPLY/VERIFY/SECRETS/
+│                                   # ROLLBACK/STATE/SECURITY/LIMITATIONS
 ├── crates/
-│   ├── configctl-cli/              # binary: `configctl`
-│   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   ├── commands/           # one module per command
-│   │   │   ├── registry.rs         # composition root (concrete providers)
-│   │   │   └── render/             # human + JSON renderers
-│   │   └── tests/                  # end-to-end CLI tests (assert_cmd)
-│   ├── configctl-core/             # domain; NO platform/provider deps
+│   ├── configctl-cli/              # binary `configctl` + command handlers
+│   │   ├── src/main.rs             # clap surface, exit codes
+│   │   ├── src/commands/           # scan/capture/plan/apply/verify/env/
+│   │   │                           # secrets/audit/rollback/doctor/init/profile
+│   │   ├── src/render.rs           # P0 JSON envelope
+│   │   └── tests/                  # *_e2e CLI suites (disposable fixtures)
+│   ├── configctl-core/             # domain; NO provider-crate deps
 │   │   └── src/
-│   │       ├── domain/             # Finding, Profile, Operation, Plan, secret types
-│   │       ├── traits/             # Provider, Discoverer, SecretProvider, stores
-│   │       ├── profile/            # load, validate, canonicalize, migrate
-│   │       ├── planner/            # diff, conflicts, deterministic ordering
-│   │       ├── state/              # SQLite StateStore + BackupStore (CAS)
-│   │       ├── verify/             # check aggregation, statuses
-│   │       ├── envfile/            # bounded .env + schema parsers
-│   │       └── redact/             # SecretRegistry, redaction layer
-│   ├── configctl-discovery/        # walkers, discoverers, detection
-│   ├── configctl-secret/           # SecretProvider impl: Linux Secret Service
-│   ├── configctl-provider-files/   # managed files
-│   ├── configctl-provider-apt/     # apt-get via CommandRunner
-│   ├── configctl-provider-systemd/ # systemctl --user via CommandRunner
-│   ├── configctl-provider-env/     # environment.d management
-│   └── configctl-audit/            # git + permission + leak audit checks
-├── fixtures/                       # static test fixtures (fake projects)
-│   ├── projects/                   # .env files, configs, fake markers
-│   ├── profiles/                   # valid + malicious profile bundles
-│   └── canaries/                   # known secret values for leak tests
-└── xtask/                          # dev automation (optional, P1+)
+│   │       ├── profile(_load).rs   # typed model, load/validate/canonicalize
+│   │       ├── plan.rs / observe.rs# diff engine + read-only observation
+│   │       ├── state.rs            # SQLite store + plans/journal/history
+│   │       ├── apply.rs            # journaled execution (INTENT…DONE)
+│   │       ├── rollback.rs         # restore + recovery classification
+│   │       ├── verify.rs           # drift detection
+│   │       ├── secrets.rs          # refs, SecretValue, backends
+│   │       ├── env_verify.rs       # schema verification
+│   │       ├── backup.rs / lock.rs # CAS backups, flock
+│   │       ├── command.rs          # CommandRunner (only subprocess path)
+│   │       ├── hash.rs             # canonical SHA-256
+│   │       └── redact.rs / envfile.rs / paths.rs / files.rs / ...
+│   └── configctl-discovery/        # bounded walkers, detectors, scanner
+└── target/                         # build artifacts (gitignored)
 ```
-
----
 
 ## 2. Crate responsibilities and dependency rules
 
 | Crate | Type | Responsibility | May depend on |
 |---|---|---|---|
-| `configctl-cli` | bin | arg parsing, command handlers, rendering, exit codes, provider composition | all crates |
-| `configctl-core` | lib | domain types, traits, profile, planner, state, verifier, env parsers, redaction | std + a small vetted set (`serde`, `toml`, `rusqlite`, `sha2`, `thiserror`) |
+| `configctl-cli` | bin+lib | arg parsing, command handlers, rendering, exit codes | core, discovery, clap, serde, rpassword |
+| `configctl-core` | lib | domain types, plan/apply/verify/rollback, state, secrets, parsers, redaction | std + `serde`, `toml`, `rusqlite` (bundled), `sha2`, `hex`, `fs2`, `thiserror` |
 | `configctl-discovery` | lib | bounded traversal, discoverers, secret detection, project detection | core |
-| `configctl-secret` | lib | Linux Secret Service backend via `keyring` | core |
-| `configctl-provider-files` | lib | atomic managed-file operations | core |
-| `configctl-provider-apt` | lib | apt-get via `CommandRunner` | core |
-| `configctl-provider-systemd` | lib | systemctl --user via `CommandRunner` | core |
-| `configctl-provider-env` | lib | environment.d file management | core |
-| `configctl-audit` | lib | git/permission/secret-leak audit checks | core (+ discovery) |
-| `xtask` | bin | dev tasks (fixture gen, release checks) | dev-only |
 
-**Hard rules (enforced in CI):**
+**Hard rules:**
 
-1. `configctl-core` must not depend on any provider crate, `clap`, `keyring`,
-   or platform-specific crates. A CI dependency check fails the build on
-   violation.
-2. Providers depend on core, never on each other.
-3. Only `configctl-cli` constructs concrete providers (composition root).
-4. No crate performs network I/O; CI greps for networking crates in
-   `Cargo.lock` denials.
-5. Subprocess execution exists only behind `CommandRunner`; CI greps for
-   direct `std::process::Command` outside the runner implementation and tests.
+1. `configctl-core` must not depend on any provider implementation crate
+   (there are none), `clap`, or D-Bus crates.
+2. Only `configctl-cli` wires concrete backends (composition root).
+3. No crate performs network I/O.
+4. Subprocess execution goes through `CommandRunner` (fixed argv, caps,
+   timeouts); the single exception is the `secret-tool store` stdin path,
+   which keeps the same guarantees (fixed argv, no shell) and is documented
+   in `secrets.rs`.
+5. Secret values never cross into rendering/serialization/state types.
 
 ---
 
 ## 3. Naming and module conventions
 
 - Crates: `configctl-<role>`; internal modules short and single-purpose.
-- Public items documented; `#![deny(missing_docs)]` in library crates.
-- Errors: `thiserror` enums per crate; core error types are value-free by
-  construction (no `String` fields that could hold content).
-- Serde: domain types do not derive `Serialize` directly for output; dedicated
-  redaction-safe view types do (prevents accidental value serialization).
-- Paths: `PathBuf` everywhere internally; `~` only exists in profile text and
-  is expanded at load time by one function.
-- Time: `SystemTime` in domain, rendered as RFC 3339.
-- IDs: ULIDs (`ulid` crate) for plans; stable derived strings for operations.
-
----
+- Errors: value-free by construction (no value-carrying fields; messages are
+  static templates plus names/paths).
+- Serde: value-holding types (`SecretValue`, `ParsedVariable`) never serialize
+  values; plan/state/verify types carry hashes/refs only.
+- Paths: `PathBuf` internally; `~` only in profile text, expanded by one
+  function per use site.
+- Time: unix seconds in state; RFC 3339 informational stamps in profiles.
+- IDs: timestamp+random plan ids; stable `op-NNNN` operation ids in plan order.
 
 ## 4. Feature flags
 
-| Feature | Crate | Purpose |
-|---|---|---|
-| `test-fakes` | core, discovery, providers | in-memory fakes and scripted runners for tests |
-| `slow-tests` | cli (dev) | opt-in large-fixture/performance tests |
-| `fuzzing` | core | `arbitrary` derives for fuzz targets |
+None in v1. Test-only behavior is gated by environment (`CONFIGCTL_*`),
+never by features; no flag changes security behavior.
 
-No feature may change security behavior at runtime; flags gate test/build
-extras only.
-
----
-
-## 5. CI outline
+## 5. Quality gates (local; no CI configured in v1)
 
 ```
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-cargo test -p configctl-cli --test e2e
-cargo deny check advisories licenses bans sources
-cargo audit
-# dependency-direction check (core has no provider deps; no direct Command outside runner)
+cargo audit                      # clean at v1.0.0-rc.1
+cargo build --release
 ```
 
-Matrix: Linux (ubuntu-latest) only for v0.1. MSRV job runs the workspace with
-the pinned minimum toolchain.
-
----
+Matrix: Linux x86_64. MSRV 1.97 (pinned toolchain in `rust-toolchain.toml`).
 
 ## 6. Versioning
 
 - Workspace crates share one version; the binary reports it via
-  `configctl --version` (`configctl 0.1.0`).
+  `configctl --version` (`configctl 1.0.0-rc.1`).
 - `schema_version` values (profile/config/JSON output) are independent of the
   crate version and only bump on breaking format changes, with documented
   migration.
-- `Cargo.lock` is committed; dependency additions require a short rationale in
-  the PR (attack surface review, per THREAT_MODEL.md T19).
+- `Cargo.lock` is committed; dependency additions require a short rationale
+  (attack surface review, per THREAT_MODEL.md T19).
 
----
-
-## 7. Local development workflow (target state)
+## 7. Local development workflow
 
 ```
-cargo xtask fixtures          # regenerate fixture trees
-cargo test --workspace        # unit + integration
-cargo test -p configctl-cli --test e2e
-cargo run -p configctl-cli -- scan fixtures/projects --json
+cargo test --workspace
+cargo run -p configctl-cli -- scan ./fixture --json
 ```
 
-Manual testing always uses `--state-dir` and `HOME` overrides pointing at a
-temporary directory. Running the binary against the developer's real `$HOME`
-during development is prohibited by the testing strategy.
+Manual testing always uses `--state-dir` and temp homes. Running the binary
+against the developer's real `$HOME` for destructive commands during
+development is prohibited by the testing strategy.

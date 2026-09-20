@@ -1,6 +1,6 @@
 # DEFERRED_FEATURES.md — Explicitly deferred scope
 
-Status: **P0 draft. No implementation exists yet.**
+Status: **Current (v1.0.0-rc.1).** Deferred items remain out of scope; see also LIMITATIONS.md.
 
 This list is normative: features here are **not implemented in v0.1** and must
 not be partially implemented, half-wired, or hinted at in output. Deferring

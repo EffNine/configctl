@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **P0 draft. No implementation exists yet.**
+Status: **Implemented (v1.0.0-rc.1).** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -137,9 +137,12 @@ JSON (`--json`) shape:
 ### 2.3 `configctl capture`
 
 ```
-configctl capture <NAME> [--from <PATH>]... [--out <DIR>]
-                 [--include-files <SPEC>]... [--no-files] [--json]
+configctl capture [NAME] [--from <PATH>]... [--output <DIR>] [--force]
+                  [--dry-run] [--json]
 ```
+
+Actual v1 surface: `capture [NAME] [--from/--root PATH]... [--output/--out DIR]
+[--force] [--depth N] [--dry-run] [--json] [-q] [-v]`.
 
 Inspects the live machine and writes a profile bundle. Never captures secret
 values: secret-bearing variables are recorded in `secrets.manifest.toml` as
@@ -186,8 +189,12 @@ configctl profile migrate <NAME> --to <SCHEMA_VERSION> [--yes]
 ### 2.5 `configctl plan`
 
 ```
-configctl plan [NAME] [--json] [--out <FILE>] [--verbose]
+configctl plan <PROFILE> [--json] [--fail-on-conflict] [-v]
 ```
+
+`<PROFILE>` is a bundle path or a name under `~/.config/configctl/profiles/`.
+The plan is persisted and its ID printed; exit 0 even with conflicts (scripts
+add `--fail-on-conflict` for exit 5). Global `--state-dir` overrides state.
 
 Produces and persists a plan. No mutation. Conflicts are reported but exit is
 0 (the plan was produced); scripts that want failure on conflicts use exit code
@@ -223,11 +230,11 @@ No changes made. Run `configctl apply work` to execute this plan (id: 01J...).
 ### 2.6 `configctl apply`
 
 ```
-configctl apply [NAME] [--plan <PLAN_ID>] [--yes] [--dry-run]
+configctl apply [PLAN_ID] [--plan <PLAN_ID>] [--yes] [--dry-run]
                 [--adopt <TARGET>]... [--json]
 ```
 
-- Defaults to the latest valid plan for the profile. Refuses stale plans
+- Takes a plan ID only — never a profile path (refused, exit 2). Refuses stale plans
   (profile or state changed since planning) with exit 5 and a re-plan hint.
 - Executes **exactly** the planned operations, in plan order.
 - Prompts for approval unless `--yes`; declines exit 4.
@@ -474,14 +481,19 @@ Apply 6 operations to this machine? [y/N]
 
 | Command | First delivered in |
 |---|---|
-| `init`, `scan`, `doctor` (partial) | P1 |
-| `capture`, `profile list/show/validate` | P2 |
+| `init`, `scan`, `doctor` | P1+P8 |
+| `capture`, `profile list/show/validate/migrate` | P2+P8 |
 | `plan` | P3 |
 | `apply` | P4 |
 | `verify` | P5 |
-| `env *`, `secrets *`, `audit *` | P6 |
-| `rollback` | P7 |
-| hardening, JSON stability guarantees | P8 |
+| `env *`, `secrets *`, `audit`, `audit git` | P6 |
+| `rollback`, `doctor` (recovery) | P7 |
+| hardening, JSON stability, RC | P8 |
+
+`profile migrate` supports `--to 1` only (v1 is the sole schema; already-
+current profiles report no-op). `secrets set` reads via hidden prompt or
+`--stdin`; `secrets get --show` needs a TTY (or `--force`); `--show --json`
+is refused.
 
 Until a command's milestone lands, invoking it exits 2 with
 `not implemented until milestone P<n>`.

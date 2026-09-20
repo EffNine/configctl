@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — configctl
 
-Status: **P0 design draft. No implementation exists yet.**
+Status: **Implemented (v1.0.0-rc.1).** This document describes actual behavior; P0 open questions resolved in this release are noted inline.
 Scope of this document: the v0.1 architecture (milestones P0–P8). Anything not
 needed for v1.0 is listed in `DEFERRED_FEATURES.md` and deliberately not designed
 in detail here.
@@ -122,39 +122,35 @@ Guarantees per phase:
 
 ---
 
-## 5. Component view
+## 5. Component view (as built: three crates)
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │ configctl-cli                                                      │
 │   clap parsing · command handlers · human/JSON rendering · exit codes │
+│   composition root: wires SecretToolBackend/FileTestBackend + runner │
 └──────────────┬─────────────────────────────────────────────────────┘
                │ depends on
 ┌──────────────▼─────────────────────────────────────────────────────┐
 │ configctl-core                                                     │
-│   domain types · provider traits · profile load/validate · planner │
-│   state store (SQLite) · verifier · env parsing · redaction        │
-│   (platform-independent; no apt/systemd/filesystem specifics)      │
-└───┬───────────────┬───────────────┬───────────────┬────────────────┘
-    │               │               │               │
-┌───▼─────┐  ┌──────▼──────┐  ┌─────▼──────┐  ┌─────▼──────────────┐
-│config-  │  │configctl-   │  │configctl-  │  │configctl-          │
-│ctl-     │  │provider-    │  │provider-   │  │provider-env        │
-│discovery│  │apt          │  │systemd     │  │(.env parsing/verify)│
-└─────────┘  └─────────────┘  └────────────┘  └────────────────────┘
-    │               │               │               │
-    └───────────────┴───────┬───────┴───────────────┘
-                            │
-              ┌─────────────▼─────────────┐   ┌──────────────────────┐
-              │ configctl-secret          │   │ configctl-audit      │
-              │ SecretProvider impls      │   │ git/permission/secrets│
-              │ (Linux Secret Service)    │   │ audit checks         │
-              └───────────────────────────┘   └──────────────────────┘
+│   domain types · profile load/validate · planner · state (SQLite)   │
+│   apply journal · rollback/recovery · verifier · env parsing        │
+│   secrets (refs/values/backends) · audit logic · redaction          │
+│   (platform specifics only via CommandRunner/file probing)          │
+└──────────────┬─────────────────────────────────────────────────────┘
+               │ depends on
+┌──────────────▼─────────────────────────────────────────────────────┐
+│ configctl-discovery                                                │
+│   bounded walker · project/env/config/git detectors · secret        │
+│   classification · system metadata · scan service                   │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-Dependency direction: **providers → core**, never the reverse. The CLI crate is
-the only place that knows the concrete provider set (composition root). See
-`WORKSPACE_STRUCTURE.md` for crate-by-crate rules.
+Dependency direction: **discovery → core**, never the reverse (core defines
+a `ScanView` adapter so it never imports discovery). Provider logic (files,
+apt, systemd, env, secrets, audit) lives in focused core modules behind
+narrow traits; the CLI crate is the only place that wires concrete backends.
+A nine-crate split was considered and deferred as premature.
 
 ---
 
@@ -433,7 +429,7 @@ Profile / env schema          SecretRef ("secret://ns/path")
         │                              │
         ▼                              ▼
    Planner/Verifier  ──────────►  SecretProvider (trait, core)
-                                       ├── LinuxSecretService  (v0.1, keyring crate)
+                                       ├── SecretToolBackend   (v1, `secret-tool` CLI via CommandRunner)
                                        └── future: pass, 1Password, Bitwarden, age vault
 ```
 
@@ -447,8 +443,8 @@ Profile / env schema          SecretRef ("secret://ns/path")
 - `secrets import` is interactive: candidates are shown **redacted** with
   per-item approval (Review / Import / Ignore / Abort). Originals are never
   deleted or rewritten in v0.1.
-- Secret Service is the v0.1 backend (via the `keyring` crate → Secret Service
-  on Linux). If no unlocked Secret Service is reachable, secret-dependent
+- Secret Service is the v1 backend (via the `secret-tool` CLI → Secret Service
+  on Linux; value on stdin only, never argv). If no unlocked Secret Service is reachable, secret-dependent
   commands fail with exit 6 and a remediation hint; non-secret functionality
   is unaffected. No custom encryption exists anywhere in the project.
 
@@ -634,20 +630,20 @@ adapter does not already need.
 
 | # | Decision | Rationale | Status |
 |---|---|---|---|
-| D1 | Rust, single workspace, stable toolchain | Linux-native, single binary, strong FS/process APIs, testable boundaries | Proposed |
-| D2 | Profile + config format is **TOML** | Maintained Rust tooling (`toml`), deterministic, no YAML deserialization footguns; final call pending review | Proposed |
-| D3 | 9 crates: cli, core, discovery, secret, audit, 4 providers | Provider boundary without premature micro-crates; profile/planner/state live in core | Proposed |
-| D4 | State store is SQLite (`rusqlite`, bundled) behind `StateStore` | ACID, crash-safe journal for interrupted apply, queryable history | Proposed |
-| D5 | Secret backend v0.1 = Linux Secret Service via `keyring` crate | Native storage, no custom crypto | Proposed |
-| D6 | Secrets addressed as `secret://<namespace>/<path>` | Profile-safe references, provider-agnostic | Proposed |
-| D7 | Synchronous core; parallelism only inside discovery | Simplicity; avoids async runtime in a CLI | Proposed |
-| D8 | Apply executes the exact approved plan; no auto re-plan | Safety, auditability | Proposed |
-| D9 | Providers shell out to `apt-get` / `systemctl --user` via an injected `CommandRunner` | Testable, no heavy D-Bus dependency; parsing is isolated and version-checked | Proposed |
-| D10 | Env-file parsing is an in-core, bounded, pure parser | Shared by discovery and validation; full control over safety limits | Proposed |
-| D11 | v0.1 does not write secret values to disk at all | Avoids the highest-risk behavior until runtime injection is designed | Proposed |
-| D12 | Managed files only under `$HOME` (user services only) | Keeps privilege surface out of v0.1 | Proposed |
-| D13 | Apt operations may use `sudo -n` after plan approval; nothing else elevates | Realistic package management with explicit, visible privilege boundary | Proposed |
-| D14 | License, MSRV, CI matrix to be finalized before P1 | Open-source release requirements | Open |
+| D1 | Rust, single workspace, stable toolchain | Linux-native, single binary, strong FS/process APIs, testable boundaries | Decided |
+| D2 | Profile + config format is **TOML** | Maintained Rust tooling (`toml`), deterministic, no YAML deserialization footguns; final call pending review | Decided |
+| D3 | 3 crates: cli, core, discovery; provider logic in core modules | Provider boundary without premature micro-crates; profile/planner/state live in core | Decided |
+| D4 | State store is SQLite (`rusqlite`, bundled) behind `StateStore` | ACID, crash-safe journal for interrupted apply, queryable history | Decided |
+| D5 | Secret backend v1 = Linux Secret Service via `secret-tool` CLI | Native storage, no custom crypto, no D-Bus code | Decided |
+| D6 | Secrets addressed as `secret://<namespace>/<path>` | Profile-safe references, provider-agnostic | Decided |
+| D7 | Synchronous core; parallelism only inside discovery | Simplicity; avoids async runtime in a CLI | Decided |
+| D8 | Apply executes the exact approved plan; no auto re-plan | Safety, auditability | Decided |
+| D9 | Providers shell out to `apt-get` / `systemctl --user` via an injected `CommandRunner` | Testable, no heavy D-Bus dependency; parsing is isolated and version-checked | Decided |
+| D10 | Env-file parsing is an in-core, bounded, pure parser | Shared by discovery and validation; full control over safety limits | Decided |
+| D11 | v0.1 does not write secret values to disk at all | Avoids the highest-risk behavior until runtime injection is designed | Decided |
+| D12 | Managed files only under `$HOME` (user services only) | Keeps privilege surface out of v0.1 | Decided |
+| D13 | Apt operations may use `sudo -n` after plan approval; nothing else elevates | Realistic package management with explicit, visible privilege boundary | Decided |
+| D14 | License MIT OR Apache-2.0; MSRV 1.97 pinned; no CI in v1 (local gates) | Open-source release requirements | Decided |
 
 ---
 
@@ -668,33 +664,31 @@ adapter does not already need.
 
 ---
 
-## 19. Milestone map (condensed)
+## 19. Milestone map (v1.0.0-rc.1: all delivered)
 
-| Milestone | Deliverable | Acceptance gate |
+| Milestone | Deliverable | Gate evidence |
 |---|---|---|
-| P0 | This document set | Docs reviewed; open decisions resolved |
-| P1 | Discovery + scan | Realistic tree scanned read-only; redaction tests pass |
-| P2 | Profile + capture | Machine represented as a profile with zero secret values |
-| P3 | Planner + diff + dry-run | Plan shows exactly what apply would do; JSON stable |
-| P4 | Apply (files, env, apt, user services) | Controlled environment reproduced from profile |
-| P5 | Verify + drift report | MATCH/DRIFT/MISSING/UNMANAGED/UNKNOWN accurate |
-| P6 | Secrets + env schemas + import + audit | Secrets managed without entering profiles/logs |
-| P7 | Rollback + recovery | Failed changes recoverable; interrupted apply detectable |
-| P8 | Hardening | Security tests, fuzzing, docs, release readiness |
+| P0 | This document set | Resolved below; docs describe actual behavior. |
+| P1 | Discovery + scan | Scan tests, redaction tests. |
+| P2 | Profile + capture | Bundle tests, zero-secret-value proof. |
+| P3 | Planner + diff | Determinism/hash/ownership/approval tests. |
+| P4 | Apply (files, env, apt, user services) | Journal/lock/atomicity/fail-stop tests. |
+| P5 | Verify + drift report | Six-status matrix + exit-code tests. |
+| P6 | Secrets + env schemas + import + audit | Discipline suite, no-fallback proof. |
+| P7 | Rollback + recovery | Restore + failpoint matrix + doctor. |
+| P8 | Hardening | Attack/fuzz/canary/idempotency/E2E suites, audit clean, release build. |
 
 ---
 
-## 20. Open questions
+## 20. Open questions (resolved for v1.0.0-rc.1)
 
-1. Profile format TOML vs YAML (D2) — TOML recommended.
-2. Project/binary name `configctl` (tentative).
-3. License (MIT/Apache-2.0 dual recommended).
-4. Whether apt should be usable at all behind `sudo -n` in v1.0, or limited to
-   `plan`-only with instructions for manual installation.
-5. Fallback secret policy for machines without Secret Service.
-6. Whether `packages.lock` pins or merely records versions.
-7. Backup encryption for the state directory.
-8. Exact MSRV and CI matrix.
-
-These are tracked in the P0 report; no code may assume an answer before it is
-decided.
+1. Profile format TOML vs YAML — **TOML** (implemented).
+2. Project/binary name — **`configctl`**.
+3. License — **MIT OR Apache-2.0** dual (`LICENSE-MIT`, `LICENSE-APACHE`).
+4. apt behind `sudo -n` — **accepted** for v1.0: plan-visible, approval-bound,
+   fail-safe (exit 8), never silent.
+5. Fallback secret policy without Secret Service — **no fallback**; exit 6
+   with a hint (test-only file backend is explicitly gated).
+6. `packages.lock` — **record and report**; no pinning/downgrade enforcement.
+7. Backup encryption — **deferred**; `0700`/`0600` + documented.
+8. MSRV and toolchain — **1.97**, pinned in `rust-toolchain.toml`.

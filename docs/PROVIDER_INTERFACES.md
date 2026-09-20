@@ -1,6 +1,6 @@
 # PROVIDER_INTERFACES.md — Core traits and provider design
 
-Status: **P0 design draft. No implementation exists yet.** Sketches are
+Status: **Implemented (v1.0.0-rc.1).** Provider logic lives in `configctl-core` modules behind narrow traits; the CLI crate is the composition root. Sketches below are
 illustrative Rust; exact signatures are finalized at P1/P3.
 
 ---
@@ -214,8 +214,9 @@ Rules:
   runtime injection. No other code path may call it.
 - `list` is best-effort: not all backends enumerate; `None` capability means
   `secrets list` falls back to the profile/manifest-known references.
-- v0.1 implementation: Linux Secret Service via the `keyring` crate
-  (sync API, hidden prompt values passed via stdin/prompt, never argv).
+- v1 implementation: Linux Secret Service via the `secret-tool` CLI
+  (fixed argv through `CommandRunner` for lookup/clear; piped stdin for store;
+  hidden prompt values passed via prompt/stdin, never argv).
 - Deferred backends: `pass`, 1Password, Bitwarden, encrypted age vault
   (see `DEFERRED_FEATURES.md`). No custom cryptography is ever permitted.
 

@@ -1,17 +1,22 @@
-//! configctl binary entry point (P1 scan + P2 capture; both read-only w.r.t.
-//! the source environment).
+//! configctl binary entry point: Linux-first environment manager.
+//!
+//! Read-only commands (scan, capture, plan, verify, env, audit, doctor,
+//! profile) never mutate the machine. Only `apply`, `rollback`, and
+//! `secrets set/import` mutate, and only after explicit approval.
 
 use clap::{Parser, Subcommand};
 use configctl_cli::commands::{
-    apply, audit, capture, doctor, env, plan, rollback, scan, secrets, verify,
+    apply, audit, capture, doctor, env, init, plan, profile, rollback, scan, secrets, verify,
 };
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "configctl")]
-#[command(about = "Linux-first environment manager (scan + capture + plan; apply in P4)")]
-#[command(version = "0.1.0")]
+#[command(
+    about = "Linux-first environment manager: discover, capture, plan, apply, verify, roll back"
+)]
+#[command(version)]
 struct Cli {
     /// Override the state directory (default ~/.local/state/configctl)
     #[arg(long = "state-dir", global = true, value_name = "DIR")]
@@ -170,6 +175,55 @@ enum Cmd {
     /// Diagnostics: platform, backends, state, interrupted applies (read-only)
     Doctor {
         /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create config, profiles, and state directories (touches nothing else)
+    Init {
+        /// Default profile name for the new config
+        #[arg(long = "profile", value_name = "NAME")]
+        profile: Option<String>,
+        /// Overwrite an existing config file
+        #[arg(long)]
+        force: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect and validate profile bundles (read-only, except migrate)
+    Profile {
+        #[command(subcommand)]
+        cmd: ProfileCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// List known profiles
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render the canonical profile (never values)
+    Show {
+        #[arg(value_name = "NAME_OR_PATH")]
+        profile: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a profile bundle (all errors listed)
+    Validate {
+        #[arg(value_name = "NAME_OR_PATH")]
+        profile: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explicit one-way schema migration
+    Migrate {
+        #[arg(value_name = "NAME_OR_PATH")]
+        profile: String,
+        #[arg(long = "to", value_name = "SCHEMA_VERSION")]
+        to: u32,
         #[arg(long)]
         json: bool,
     },
@@ -909,6 +963,167 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         }
+        Some(Cmd::Init {
+            profile,
+            force,
+            json,
+        }) => {
+            let out = init::run_init(profile.as_deref(), *force, None, cli.state_dir.as_deref());
+            if let Some(e) = &out.error {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::error(
+                            "init",
+                            e,
+                            "re-run with --force to overwrite"
+                        )
+                        .to_json()
+                    );
+                } else {
+                    eprintln!("error: {e}");
+                }
+                return ExitCode::from(out.exit_code as u8);
+            }
+            if *json {
+                let data = serde_json::json!({
+                    "config": out.config_path.to_string_lossy(),
+                    "profiles": out.profiles_dir.to_string_lossy(),
+                    "state": out.state_dir.to_string_lossy(),
+                });
+                println!(
+                    "{}",
+                    configctl_cli::render::Envelope::ok("init", data).to_json()
+                );
+            } else {
+                print!("{}", init::render_human(&out));
+            }
+            ExitCode::SUCCESS
+        }
+        Some(Cmd::Profile { cmd }) => match cmd {
+            ProfileCmd::List { json } => match profile::run_list(None) {
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "profile list",
+                                &e,
+                                "run `configctl init`"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                Ok(infos) => {
+                    if *json {
+                        let data = serde_json::json!({"profiles": infos.iter().map(|i| serde_json::json!({"name": i.name, "path": i.path.to_string_lossy(), "schema_version": i.schema_version})).collect::<Vec<_>>()});
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok("profile list", data).to_json()
+                        );
+                    } else {
+                        print!("{}", profile::render_list_human(&infos));
+                    }
+                    ExitCode::SUCCESS
+                }
+            },
+            ProfileCmd::Show { profile: p, json } => match profile::run_show(p) {
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "profile show",
+                                &e,
+                                "check the profile path"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                Ok(text) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok(
+                                "profile show",
+                                serde_json::json!({"profile": p, "document": text})
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        print!("{text}");
+                    }
+                    ExitCode::SUCCESS
+                }
+            },
+            ProfileCmd::Validate { profile: p, json } => {
+                let errors = profile::run_validate(p);
+                if *json {
+                    let data = serde_json::json!({"profile": p, "valid": errors.is_empty(), "errors": errors});
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("profile validate", data).to_json()
+                    );
+                } else if errors.is_empty() {
+                    println!("profile {p}: valid");
+                } else {
+                    eprintln!("profile {p}: invalid");
+                    for e in &errors {
+                        eprintln!("  - {e}");
+                    }
+                }
+                if errors.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(2)
+                }
+            }
+            ProfileCmd::Migrate {
+                profile: p,
+                to,
+                json,
+            } => match profile::run_migrate(p, *to) {
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "profile migrate",
+                                &e,
+                                "only schema 1 is supported"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                Ok(msg) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok(
+                                "profile migrate",
+                                serde_json::json!({"message": msg})
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        println!("{msg}");
+                    }
+                    ExitCode::SUCCESS
+                }
+            },
+        },
     };
     code
 }

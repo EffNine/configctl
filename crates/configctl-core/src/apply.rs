@@ -484,6 +484,15 @@ fn execute_file_op(
     crate::paths::validate_file_target(&op.target).map_err(ApplyError::Conflict)?;
     let abs: PathBuf = observe::expand_target(&op.target, home)
         .ok_or_else(|| ApplyError::Conflict(format!("invalid target {:?}", op.target)))?;
+    // Refuse symlinked parent components (symlink-swap guard for creates;
+    // updates re-check immediately before write as well).
+    if has_symlink_parent(&abs) {
+        journal(PH_FAILED, None, Some("symlink parent")).map_err(ApplyError::Internal)?;
+        return Err(ApplyError::Conflict(format!(
+            "file {}: a parent directory is a symlink; refusing",
+            op.target
+        )));
+    }
 
     // Payload bytes from the bundle.
     let entry = loaded
@@ -621,6 +630,18 @@ fn execute_file_op(
         }
     }
     // Re-check symlink status immediately before write (TOCTOU narrowing).
+    if has_symlink_parent(&abs) {
+        journal(
+            PH_FAILED,
+            None,
+            Some("symlink parent swapped in before write"),
+        )
+        .map_err(ApplyError::Internal)?;
+        return Err(ApplyError::Conflict(format!(
+            "file {}: a parent directory became a symlink before write; refusing",
+            op.target
+        )));
+    }
     if let Ok(m) = std::fs::symlink_metadata(&abs) {
         if m.file_type().is_symlink() {
             journal(PH_FAILED, None, Some("symlink swapped in before write"))
@@ -1122,6 +1143,21 @@ fn execute_git_op(
         result: "ok".into(),
         backup_sha: None,
     }))
+}
+
+/// True when any existing ancestor of `abs` is a symlink (fail-closed: an
+/// unreadable ancestor stops the walk and is treated as unsafe).
+fn has_symlink_parent(abs: &Path) -> bool {
+    let mut cur = abs.parent();
+    while let Some(p) = cur {
+        match std::fs::symlink_metadata(p) {
+            Ok(m) if m.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+        cur = p.parent();
+    }
+    false
 }
 
 fn is_package_installed(runner: &dyn CommandRunner, name: &str) -> bool {

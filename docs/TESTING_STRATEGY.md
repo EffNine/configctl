@@ -1,6 +1,6 @@
 # TESTING_STRATEGY.md — Testing and verification strategy
 
-Status: **P0 draft. No implementation exists yet.**
+Status: **Implemented (v1.0.0-rc.1).** Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `cargo build --release`, plus canary/attack/fuzz/idempotency/E2E suites.
 
 Because `configctl` modifies developer machines and handles secrets, testing is
 a first-class requirement, not an afterthought. Every safety claim in
@@ -42,43 +42,34 @@ claims.
 
 ---
 
-## 3. Test infrastructure
+## 3. Test infrastructure (as built)
 
-### 3.1 `TestEnv` fixture builder (core, feature `test-fakes`)
+No `TestEnv` builder or `xtask` exists in v1; fixtures are constructed inline
+per test file with `tempfile::tempdir()`:
 
-```rust
-let env = TestEnv::builder()
-    .home_tempdir()                          // isolated HOME
-    .project("conductor", |p| p
-        .file(".env", "PORT=3000\nAGNES_API_KEY=sk-test-CANARY123\n")
-        .file(".env.example", "PORT=\nAGNES_API_KEY=\n")
-        .marker("Cargo.toml"))
-    .dotfile(".gitconfig", "[user]\n\tname = Test\n")
-    .fake_apt().installed(["git", "curl"]).available(["ripgrep"])
-    .fake_systemd().unit("docker", enabled: false, running: false)
-    .fake_keyring().with("secret://work/dev/X", "CANARY")
-    .build();
-```
+- isolated homes, bundles, and state dirs per test (correct `0700`/`0600`
+  permissions asserted, not assumed);
+- `FakeCommandRunner` for all subprocesses (scripted outputs, argv
+  recording) — except one read-only audit test that runs real `git` in a
+  disposable repo;
+- `MemoryBackend` / gated `FileTestBackend` (`CONFIGCTL_SECRET_TEST_DIR`)
+  standing in for the Secret Service; `secret-tool` is never invoked in
+  tests;
+- `CONFIGCTL_FAIL_AFTER=<op>:<PHASE>` failpoints for crash simulation
+  (test-only, serialized with a mutex, always cleared);
+- read-only commands prove non-mutation by snapshotting the fixture tree
+  before and after;
+- command handlers are exercised as library calls (`run_plan`, `run_apply`,
+  …) with JSON outputs parsed by `serde_json` in the same test.
 
-The builder:
-
-- creates a temp HOME and temp state dir with correct permissions,
-- installs fakes into the provider registry,
-- exposes `env.run(["plan", "work"])` returning structured output for
-  assertions,
-- snapshots the entire HOME tree (path + mode + hash) before and after any
-  read-only command to prove nothing changed.
-
-### 3.2 Fakes
+### 3.2 Fakes (actual)
 
 | Fake | Replaces | Behavior |
 |---|---|---|
-| `FakeCommandRunner` | real subprocesses | scripted responses, argv recording, timeout/failure injection, output-cap tests |
-| `FakeApt` | apt provider backend | in-memory package DB |
-| `FakeSystemd` | systemctl backend | in-memory unit states |
-| `FakeKeyring` | Secret Service | in-memory store, `Unavailable` mode for exit-6 tests |
-| `FakeStateStore` | SQLite | in-memory maps; SQLite itself tested separately against real temp files |
-| `ScriptedWalker` | filesystem walker | deterministic entries, adversarial paths, symlinks |
+| `FakeCommandRunner` | real subprocesses | scripted responses, argv recording, failure injection |
+| `MemoryBackend` | Secret Service | in-memory refs; `unavailable` mode for exit-6 tests |
+| `FileTestBackend` | Secret Service | file store gated by `CONFIGCTL_SECRET_TEST_DIR` (tests/canary only) |
+| Failpoints | process crashes | `CONFIGCTL_FAIL_AFTER` stops apply after a journaled phase |
 
 ---
 
@@ -153,50 +144,41 @@ Fuzz targets use `cargo-fuzz`; a fixed seed corpus lives in
 | T4/T5 traversal | Adversarial profile corpus (absolute source, `..`, symlink-in-bundle) |
 | T6 symlink redirect | Symlink target/parent scenarios; assert refusal, target outside HOME untouched |
 | T7 TOCTOU | Failpoint test mutating target after precheck; assert conflict abort, no partial write |
-| T8 concurrency | Two `apply` processes on same state dir; second exits 5 |
+| T8 concurrency | Lock-contention test: held `flock` + apply ⇒ conflict (exit 5) |
 | T9 stale plan | Plan, modify profile, apply ⇒ exit 5 with re-plan hint |
 | T10 argv secrets | `secrets set X=value` rejected by parser |
 | T11 get redirect | Non-TTY `secrets get --show` without `--force` ⇒ refusal |
-| T12 fingerprint brute force | Assert stored fingerprint of secret-containing file is not sha256(raw bytes) |
+| T12 fingerprint brute force | Values never hashed into plans/state (hashes cover refs and non-secret content only); canary byte-scan of the state dir |
 | T13 backups perms | Assert `0700` state dir / `0600` backups; documented exception test |
 | T14 malicious env | Fuzz + fixture corpus (expansion syntax, backticks, `$()`, deep nesting) ⇒ no execution |
-| T15 DoS | Giant file, 100k-dir tree, symlink loop ⇒ bounded time/memory, no panic |
+| T15 DoS | Oversized payloads, deep nesting, malformed corpora ⇒ bounded, no panic, no unbounded reads |
 | T16 argv injection | Package/unit names with metacharacters rejected at validation; runner test sees only safe argv |
 | T17 profile scope | Profile cannot name resources not in its declared sections |
-| T18 audit false negative | Fixture repo matrix (tracked/untracked/ignored/submodule) |
-| T19 dependencies | `cargo-deny` + review checklist |
+| T18 audit false negative | Real disposable git repo: tracked `.env` flagged; missing `.env.example` flagged |
+| T19 dependencies | `cargo audit` clean at RC + minimal-dependency review (no `cargo-deny` policy yet — deferred) |
 | T20 interrupted apply | Failpoint suite at every journal boundary |
 
 ---
 
-## 8. Performance tests
+## 8. Performance and bounds tests (actual)
 
-Fixtures generated by `xtask fixtures`:
+No RSS harness or `xtask` fixtures in v1; bounds are enforced by unit-level
+tests: oversized files rejected at load/capture (`256 KiB` caps), walker
+depth/file/total caps, subprocess output caps and timeouts, and malformed
+`.env`/profile corpora that must never panic. Full-scale benchmark fixtures
+are deferred.
 
-- flat: 10,000 files across 500 projects
-- deep: depth 50, with symlink loops
-- large: single 100 MiB file (must be skipped by cap, not read)
-- many-env: 2,000 `.env` files with 20 variables each
-
-Budgets (to be calibrated at P1, tracked as regressions afterwards): scan of
-the flat fixture under a few seconds; memory ceiling enforced by a test harness
-that watches RSS; `verify` scales linearly with managed resources.
-
----
-
-## 9. CI gates per milestone
+## 9. CI gates per milestone (actual)
 
 | Gate | Requirement |
 |---|---|
-| Every PR | fmt, clippy `-D warnings`, tests, dependency-direction check, canary suite |
-| P1 exit | scan tests + redaction suite + performance budget on flat fixture |
-| P2 exit | capture leak test (bundle grep = zero canaries) |
-| P3 exit | deterministic plan tests (byte-identical repeated runs) |
-| P4 exit | apply/rollback filesystem tests + failpoint suite |
-| P5 exit | full status matrix tests |
-| P6 exit | secret suite + FakeKeyring + real Secret Service smoke test (containerized, opt-in) |
-| P7 exit | interrupted-operation recovery matrix |
-| P8 exit | fuzz targets clean for a fixed duration, cargo-deny clean, docs complete |
+| Every change | `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, canary suite |
+| P3 exit | deterministic plan/hash tests, persistence + approval tests |
+| P4 exit | journaled apply tests, fail-stop, lock, TOCTOU, adopt |
+| P5 exit | full status matrix + exit-code tests |
+| P6 exit | secret discipline suite (argv refusal, backend gating, import) |
+| P7 exit | rollback + failpoint recovery matrix + doctor |
+| P8 exit | attack suite, fuzz corpus, idempotency/determinism proofs, `cargo audit` clean, `cargo build --release`, docs complete |
 
 ---
 
