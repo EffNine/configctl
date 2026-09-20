@@ -21,6 +21,9 @@ struct Cli {
     /// Override the state directory (default ~/.local/state/configctl)
     #[arg(long = "state-dir", global = true, value_name = "DIR")]
     state_dir: Option<String>,
+    /// Add a plain-language "what this means" note to human output
+    #[arg(long, global = true)]
+    explain: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -237,6 +240,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ProfileCmd,
     },
+    /// Plain-language help while you work: `configctl guide [topic]`
+    Guide {
+        /// Topic name (omit to list every topic)
+        #[arg(value_name = "TOPIC")]
+        topic: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -352,12 +361,91 @@ enum SecretsCmd {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(Cmd::Guide { topic }) = &cli.command {
+        return match configctl_cli::guidance::render_guide(topic.as_deref()) {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    let meta = command_meta(&cli);
+    let explain = cli.explain;
+    let code = run(cli);
+    configctl_cli::guidance::emit(&meta, last_code(), explain);
+    code
+}
+
+thread_local! {
+    /// Numeric exit code of the just-finished command, recorded by `finish`
+    /// so guidance can interpret the result after rendering.
+    static LAST_CODE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Return an exit code while recording its numeric value for guidance.
+fn finish(code: u8) -> ExitCode {
+    LAST_CODE.with(|c| c.set(code));
+    ExitCode::from(code)
+}
+
+fn last_code() -> u8 {
+    LAST_CODE.with(|c| c.get())
+}
+
+fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
+    use configctl_cli::guidance::{Meta, Topic};
+    let (topic, json, quiet) = match &cli.command {
+        Some(Cmd::Scan { json, quiet, .. }) => (Topic::Scan, *json, *quiet),
+        Some(Cmd::Capture { json, quiet, .. }) => (Topic::Capture, *json, *quiet),
+        Some(Cmd::Plan { json, .. }) => (Topic::Plan, *json, false),
+        Some(Cmd::Apply { json, .. }) => (Topic::Apply, *json, false),
+        Some(Cmd::Verify { json, .. }) => (Topic::Verify, *json, false),
+        Some(Cmd::Rollback { json, .. }) => (Topic::Rollback, *json, false),
+        Some(Cmd::Env { cmd }) => match cmd {
+            EnvCmd::Scan { json, .. } | EnvCmd::List { json, .. } | EnvCmd::Verify { json, .. } => {
+                (Topic::Env, *json, false)
+            }
+        },
+        Some(Cmd::Secrets { cmd }) => match cmd {
+            SecretsCmd::List { json, .. }
+            | SecretsCmd::Set { json, .. }
+            | SecretsCmd::Get { json, .. }
+            | SecretsCmd::Import { json, .. } => (Topic::Secrets, *json, false),
+        },
+        Some(Cmd::Audit { json, .. }) => (Topic::Audit, *json, false),
+        Some(Cmd::Doctor { json }) => (Topic::Doctor, *json, false),
+        Some(Cmd::Init { json, .. }) => (Topic::Start, *json, false),
+        Some(Cmd::Profile { cmd }) => match cmd {
+            ProfileCmd::List { json }
+            | ProfileCmd::Show { json, .. }
+            | ProfileCmd::Validate { json, .. }
+            | ProfileCmd::Migrate { json, .. } => (Topic::Profile, *json, false),
+        },
+        Some(Cmd::Guide { .. }) | None => (Topic::Start, false, false),
+    };
+    Meta {
+        topic,
+        json,
+        quiet,
+        state_dir: configctl_core::state::resolve_state_dir(cli.state_dir.as_deref()),
+    }
+}
+
+fn run(cli: Cli) -> ExitCode {
     let runner = StdCommandRunner::new();
 
     let code = match &cli.command {
         None => {
             eprintln!("configctl: no command given (try `configctl scan`, `configctl capture`, or `configctl --help`)");
-            ExitCode::from(2)
+            finish(2)
+        }
+        Some(Cmd::Guide { .. }) => {
+            // Handled in `main` before `run` is entered.
+            finish(0)
         }
         Some(Cmd::Scan {
             roots,
@@ -399,7 +487,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    return ExitCode::from(2);
+                    return finish(2);
                 }
             };
             let out = scan::run_scan_with_governor(roots, extra_roots, *depth, governor, &runner);
@@ -413,7 +501,7 @@ fn main() -> ExitCode {
                             err.errors.first().map(|w| w.message.as_str()).unwrap_or("")
                         );
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 None => {
                     let registry = &out.registry;
@@ -430,7 +518,7 @@ fn main() -> ExitCode {
                         let text = registry.redact(&text);
                         print!("{text}");
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             }
         }
@@ -478,7 +566,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    return ExitCode::from(2);
+                    return finish(2);
                 }
             };
             let out = capture::run_capture_with_governor(
@@ -502,7 +590,7 @@ fn main() -> ExitCode {
                         let msg = err.errors.first().map(|w| w.message.as_str()).unwrap_or("");
                         eprintln!("error: {}", out.registry.redact(msg));
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 None => {
                     let registry = &out.registry;
@@ -538,7 +626,7 @@ fn main() -> ExitCode {
                             print!("{text}");
                         }
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             }
         }
@@ -558,7 +646,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {}", err.message);
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 (Some(p), _) => {
                     if *json {
@@ -571,12 +659,12 @@ fn main() -> ExitCode {
                         print!("{}", plan::render_human(p));
                     }
                     if *fail_on_conflict && !p.conflicts.is_empty() {
-                        ExitCode::from(5)
+                        finish(5)
                     } else {
-                        ExitCode::SUCCESS
+                        finish(0)
                     }
                 }
-                (None, _) => ExitCode::from(1),
+                (None, _) => finish(1),
             }
         }
         Some(Cmd::Apply {
@@ -607,7 +695,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", apply::render_human(rep));
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
                 (None, Some(e)) => {
                     if *json {
@@ -620,9 +708,9 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {}", apply::error_message(e));
                     }
-                    ExitCode::from(out.exit_code as u8)
+                    finish(out.exit_code as u8)
                 }
-                (None, None) => ExitCode::from(1),
+                (None, None) => finish(1),
             }
         }
         Some(Cmd::Verify {
@@ -643,7 +731,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 (Some(rep), _) => {
                     if *json {
@@ -658,9 +746,9 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", verify::render_human(rep));
                     }
-                    ExitCode::from(out.exit_code as u8)
+                    finish(out.exit_code as u8)
                 }
-                (None, None) => ExitCode::from(1),
+                (None, None) => finish(1),
             }
         }
         Some(Cmd::Env { cmd }) => match cmd {
@@ -683,7 +771,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 Ok(view) => {
                     if *json {
@@ -699,7 +787,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", env::render_scan_human(&view));
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             },
             EnvCmd::List {
@@ -722,7 +810,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 Ok(view) => {
                     if *json {
@@ -741,7 +829,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", env::render_list_human(&view, project.as_deref()));
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             },
             EnvCmd::Verify {
@@ -771,7 +859,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    return ExitCode::from(2);
+                    return finish(2);
                 }
                 if *json {
                     let data = serde_json::json!({"findings": out.findings.iter().map(|f| serde_json::json!({"project": f.project, "variable": f.variable, "kind": f.kind, "detail": f.detail})).collect::<Vec<_>>()});
@@ -782,7 +870,7 @@ fn main() -> ExitCode {
                 } else {
                     print!("{}", env::render_verify_human(&out));
                 }
-                ExitCode::from(out.exit_code as u8)
+                finish(out.exit_code as u8)
             }
         },
         Some(Cmd::Secrets { cmd }) => match cmd {
@@ -806,7 +894,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    return ExitCode::from(out.exit_code as u8);
+                    return finish(out.exit_code as u8);
                 }
                 if *json {
                     let data = serde_json::json!({"entries": out.entries.iter().map(|e| serde_json::json!({"project": e.project, "name": e.name, "ref": e.secret_ref, "status": e.status})).collect::<Vec<_>>()});
@@ -817,7 +905,7 @@ fn main() -> ExitCode {
                 } else {
                     print!("{}", secrets::render_list_human(&out));
                 }
-                ExitCode::SUCCESS
+                finish(0)
             }
             SecretsCmd::Set {
                 secret_ref,
@@ -851,7 +939,7 @@ fn main() -> ExitCode {
                 } else {
                     println!("Stored {}.", out.secret_ref);
                 }
-                ExitCode::from(out.exit_code as u8)
+                finish(out.exit_code as u8)
             }
             SecretsCmd::Get {
                 secret_ref,
@@ -868,7 +956,7 @@ fn main() -> ExitCode {
                             let _ = std::io::stdout().write_all(b);
                             let _ = std::io::stdout().write_all(b"\n");
                         });
-                        return ExitCode::SUCCESS;
+                        return finish(0);
                     }
                 }
                 if *json {
@@ -897,7 +985,7 @@ fn main() -> ExitCode {
                 } else {
                     println!("{}: {}", out.secret_ref, out.status);
                 }
-                ExitCode::from(out.exit_code as u8)
+                finish(out.exit_code as u8)
             }
             SecretsCmd::Import {
                 paths,
@@ -953,7 +1041,7 @@ fn main() -> ExitCode {
                         eprintln!("error: {e}");
                     }
                 }
-                ExitCode::from(out.exit_code as u8)
+                finish(out.exit_code as u8)
             }
         },
         Some(Cmd::Audit {
@@ -976,7 +1064,7 @@ fn main() -> ExitCode {
                 } else {
                     eprintln!("error: {e}");
                 }
-                return ExitCode::from(2);
+                return finish(2);
             }
             if *json {
                 let data = serde_json::json!({"findings": out.findings.iter().map(|f| serde_json::json!({"severity": f.severity, "code": f.code, "message": f.message})).collect::<Vec<_>>()});
@@ -987,7 +1075,7 @@ fn main() -> ExitCode {
             } else {
                 print!("{}", audit::render_human(&out));
             }
-            ExitCode::from(out.exit_code as u8)
+            finish(out.exit_code as u8)
         }
         Some(Cmd::Rollback {
             target,
@@ -1018,7 +1106,7 @@ fn main() -> ExitCode {
                 } else {
                     print!("{}", rollback::render_human_list(plans));
                 }
-                return ExitCode::SUCCESS;
+                return finish(0);
             }
             match (&out.report, &out.error) {
                 (Some(rep), _) => {
@@ -1031,7 +1119,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", rollback::render_human(rep));
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
                 (None, Some(e)) => {
                     if *json {
@@ -1047,9 +1135,9 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {}", rollback::error_message(e));
                     }
-                    ExitCode::from(out.exit_code as u8)
+                    finish(out.exit_code as u8)
                 }
-                (None, None) => ExitCode::from(1),
+                (None, None) => finish(1),
             }
         }
         Some(Cmd::Doctor { json }) => {
@@ -1070,10 +1158,10 @@ fn main() -> ExitCode {
                 print!("{}", doctor::render_human(&out));
             }
             if out.state_ok {
-                ExitCode::SUCCESS
+                finish(0)
             } else {
                 eprintln!("error: state directory unusable");
-                ExitCode::from(1)
+                finish(1)
             }
         }
         Some(Cmd::Init {
@@ -1096,7 +1184,7 @@ fn main() -> ExitCode {
                 } else {
                     eprintln!("error: {e}");
                 }
-                return ExitCode::from(out.exit_code as u8);
+                return finish(out.exit_code as u8);
             }
             if *json {
                 let data = serde_json::json!({
@@ -1111,7 +1199,7 @@ fn main() -> ExitCode {
             } else {
                 print!("{}", init::render_human(&out));
             }
-            ExitCode::SUCCESS
+            finish(0)
         }
         Some(Cmd::Profile { cmd }) => match cmd {
             ProfileCmd::List { json } => match profile::run_list(None) {
@@ -1129,7 +1217,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 Ok(infos) => {
                     if *json {
@@ -1141,7 +1229,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", profile::render_list_human(&infos));
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             },
             ProfileCmd::Show { profile: p, json } => match profile::run_show(p) {
@@ -1159,7 +1247,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 Ok(text) => {
                     if *json {
@@ -1174,7 +1262,7 @@ fn main() -> ExitCode {
                     } else {
                         print!("{text}");
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             },
             ProfileCmd::Validate { profile: p, json } => {
@@ -1194,9 +1282,9 @@ fn main() -> ExitCode {
                     }
                 }
                 if errors.is_empty() {
-                    ExitCode::SUCCESS
+                    finish(0)
                 } else {
-                    ExitCode::from(2)
+                    finish(2)
                 }
             }
             ProfileCmd::Migrate {
@@ -1218,7 +1306,7 @@ fn main() -> ExitCode {
                     } else {
                         eprintln!("error: {e}");
                     }
-                    ExitCode::from(2)
+                    finish(2)
                 }
                 Ok(msg) => {
                     if *json {
@@ -1233,7 +1321,7 @@ fn main() -> ExitCode {
                     } else {
                         println!("{msg}");
                     }
-                    ExitCode::SUCCESS
+                    finish(0)
                 }
             },
         },
