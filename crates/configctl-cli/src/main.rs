@@ -2,7 +2,9 @@
 //! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::{apply, audit, capture, env, plan, scan, secrets, verify};
+use configctl_cli::commands::{
+    apply, audit, capture, doctor, env, plan, rollback, scan, secrets, verify,
+};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
@@ -140,6 +142,33 @@ enum Cmd {
         /// Fail with exit 3 on findings at or above this severity
         #[arg(long = "fail-on", value_name = "SEVERITY")]
         fail_on: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Roll back an applied plan from content-addressed backups (explicit only)
+    Rollback {
+        /// Plan ID, profile name (latest plan), or ~/... file target
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
+        /// Explicit plan ID
+        #[arg(long = "plan", value_name = "PLAN_ID")]
+        plan_flag: Option<String>,
+        /// Show rollback candidates without changing anything
+        #[arg(long)]
+        list: bool,
+        /// Approve non-interactively
+        #[arg(short, long)]
+        yes: bool,
+        /// Preview without writing
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Machine-readable JSON on stdout (requires --yes unless --dry-run)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Diagnostics: platform, backends, state, interrupted applies (read-only)
+    Doctor {
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -792,6 +821,93 @@ fn main() -> ExitCode {
                 print!("{}", audit::render_human(&out));
             }
             ExitCode::from(out.exit_code as u8)
+        }
+        Some(Cmd::Rollback {
+            target,
+            plan_flag,
+            list,
+            yes,
+            dry_run,
+            json,
+        }) => {
+            let out = rollback::run_rollback(
+                target.as_deref(),
+                plan_flag.as_deref(),
+                *list,
+                cli.state_dir.as_deref(),
+                None,
+                *yes,
+                *dry_run,
+                *json,
+                &runner,
+            );
+            if let Some(plans) = &out.plans {
+                if *json {
+                    let data = serde_json::json!({"plans": plans.iter().map(|(id, p, s, c)| serde_json::json!({"id": id, "profile": p, "status": s, "created_at": c})).collect::<Vec<_>>()});
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("rollback", data).to_json()
+                    );
+                } else {
+                    print!("{}", rollback::render_human_list(plans));
+                }
+                return ExitCode::SUCCESS;
+            }
+            match (&out.report, &out.error) {
+                (Some(rep), _) => {
+                    if *json {
+                        let data = serde_json::json!({"plan_id": rep.plan_id, "restored": rep.restored, "removed": rep.removed, "manual": rep.manual, "dry_run": rep.dry_run});
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok("rollback", data).to_json()
+                        );
+                    } else {
+                        print!("{}", rollback::render_human(rep));
+                    }
+                    ExitCode::SUCCESS
+                }
+                (None, Some(e)) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "rollback",
+                                &rollback::error_message(e),
+                                "see `configctl doctor`"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {}", rollback::error_message(e));
+                    }
+                    ExitCode::from(out.exit_code as u8)
+                }
+                (None, None) => ExitCode::from(1),
+            }
+        }
+        Some(Cmd::Doctor { json }) => {
+            let out = doctor::run_doctor(cli.state_dir.as_deref(), &runner);
+            if *json {
+                let data = serde_json::json!({
+                    "os": out.os, "arch": out.arch, "distro": out.distro,
+                    "package_manager": out.package_manager, "systemd_user": out.systemd_user,
+                    "secret_backend": out.secret_backend, "state_dir": out.state_dir,
+                    "state_ok": out.state_ok, "plans": out.plans,
+                    "interrupted": out.interrupted.iter().map(|p| serde_json::json!({"plan_id": p.plan_id, "profile": p.profile, "status": p.status})).collect::<Vec<_>>(),
+                });
+                println!(
+                    "{}",
+                    configctl_cli::render::Envelope::ok("doctor", data).to_json()
+                );
+            } else {
+                print!("{}", doctor::render_human(&out));
+            }
+            if out.state_ok {
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("error: state directory unusable");
+                ExitCode::from(1)
+            }
         }
     };
     code

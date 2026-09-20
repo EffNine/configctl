@@ -115,9 +115,14 @@ pub fn apply_plan(
     match status.as_str() {
         "planned" | "approved" => {}
         "applying" => {
-            return Err(ApplyError::Conflict(format!(
-                "plan {plan_id} has an unfinished journal; run `configctl doctor` and recover explicitly"
-            )));
+            // Explicit re-run after an interruption that wrote nothing
+            // (journal has no BACKUP/EXECUTE/POSTCHECK/DONE/FAILED): allow it
+            // — prechecks still guard every op. Anything else needs rollback.
+            if !crate::rollback::journal_shows_no_mutation(state_dir, plan_id) {
+                return Err(ApplyError::Conflict(format!(
+                    "plan {plan_id} has an unfinished journal; run `configctl doctor` and recover explicitly"
+                )));
+            }
         }
         "partial" => {
             return Err(ApplyError::Conflict(format!(
@@ -223,7 +228,7 @@ pub fn apply_plan(
     }
 
     // 7. Record approval + global lock + applying state.
-    if status != "approved" {
+    if status == "planned" {
         crate::state::approve_plan(state_dir, plan_id, crate::state::now_secs())
             .map_err(ApplyError::Internal)?;
     }

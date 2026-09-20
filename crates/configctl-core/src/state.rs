@@ -362,6 +362,22 @@ pub fn record_history(
     Ok(())
 }
 
+/// List plans newest-first: `(id, profile, status, created_at)`.
+pub fn list_plans(dir: &Path) -> Result<Vec<(String, String, String, i64)>, String> {
+    let conn = open_db(dir)?;
+    let mut stmt = conn
+        .prepare("SELECT id, profile, status, created_at FROM plans ORDER BY rowid DESC")
+        .map_err(|e| format!("query plans: {e:?}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .map_err(|e| format!("query plans: {e:?}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("query plans: {e:?}"))?);
+    }
+    Ok(out)
+}
+
 /// Ownership: mark a file target owned by a profile with its fingerprint.
 pub fn record_owned(
     dir: &Path,
