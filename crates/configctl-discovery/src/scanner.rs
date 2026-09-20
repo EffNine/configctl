@@ -11,6 +11,7 @@ use crate::secret::{self, EntropyScorer};
 use crate::system::{self, SystemInfo};
 use crate::walker::{BoundedWalker, StopReason, Visit};
 use configctl_core::command::CommandRunner;
+use configctl_core::governor::{GovernorBudgets, GovernorSnapshot, ResourceGovernor};
 use configctl_core::limits::Limits;
 use configctl_core::redact::SecretRegistry;
 use std::collections::BTreeMap;
@@ -21,6 +22,8 @@ use std::path::{Path, PathBuf};
 pub struct ScanOptions {
     pub roots: Vec<PathBuf>,
     pub limits: Limits,
+    /// v1.1 central budgets (defaults when unset at a construction site).
+    pub governor: GovernorBudgets,
 }
 
 /// Aggregated walk stats across all roots.
@@ -48,6 +51,8 @@ pub struct ScanResult {
     pub git_findings: Vec<GitFinding>,
     pub warnings: Vec<String>,
     pub statistics: ScanStats,
+    /// v1.1 governor snapshot (budgets consumed, limit hit, pressure).
+    pub governor: GovernorSnapshot,
 }
 
 impl ScanResult {
@@ -127,6 +132,8 @@ impl Scanner {
         let limits = &opts.limits;
         let roots = &opts.roots;
         let registry = self.registry();
+        // v1.1: one central governor for the whole scan.
+        let governor = ResourceGovernor::new(opts.governor.clone());
 
         // 1. System metadata
         let scratch = std::env::temp_dir();
@@ -153,7 +160,8 @@ impl Scanner {
 
         let mut any_walked = false;
         for root in &existing_roots {
-            let walker = BoundedWalker::new(limits.clone());
+            let walker =
+                BoundedWalker::new(limits.clone()).with_governor(std::sync::Arc::clone(&governor));
             let mut collector = |visit: &Visit| {
                 collect_visit(visit, &mut project_dirs, &mut env_paths, &mut config_paths);
                 true
@@ -169,6 +177,12 @@ impl Scanner {
                 walk_stats_total
                     .stop_reasons
                     .push(reason.as_str().to_string());
+            }
+            if let Some(gov_reason) = stats.governor_limit {
+                // Explicit budget identity for the completeness report.
+                walk_stats_total
+                    .stop_reasons
+                    .push(format!("governor:{gov_reason}"));
             }
             if stats.permission_denied > 0 {
                 walk_stats_total
@@ -371,6 +385,7 @@ impl Scanner {
             git_findings,
             warnings,
             statistics: stats,
+            governor: governor.snapshot(),
         }
     }
 }

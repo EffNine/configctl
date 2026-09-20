@@ -91,6 +91,7 @@ fn run_scan_fixture(tmp: &Path, runner: &FakeCommandRunner) -> configctl_discove
     let opts = ScanOptions {
         roots: vec![tmp.to_path_buf()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     scanner.scan(&opts, runner)
 }
@@ -164,6 +165,7 @@ fn canary_values_absent_from_human_render() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
 
@@ -193,6 +195,7 @@ fn canary_values_absent_from_json() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
 
@@ -218,6 +221,7 @@ fn canary_values_absent_from_debug() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     let dbg = format!("{result:?}");
@@ -243,6 +247,7 @@ fn canary_values_absent_from_errors() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     let registry = scanner.registry();
@@ -307,6 +312,7 @@ fn deep_tree_is_bounded() {
             max_depth: 5,
             ..Limits::default()
         },
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     // The scan must terminate and report the stop reason.
@@ -330,6 +336,7 @@ fn huge_file_is_bounded_not_read() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     let rec = result
@@ -367,6 +374,7 @@ fn permission_denied_does_not_crash() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     // The scan must complete and report the permission problem, not panic.
@@ -467,6 +475,7 @@ fn traversal_cannot_escape_root() {
     let opts = ScanOptions {
         roots: vec![proj.clone()],
         limits: Limits::default(),
+        governor: Default::default(),
     };
     let result = scanner.scan(&opts, &runner);
     // The outside file must not be recorded (symlinks are not followed).

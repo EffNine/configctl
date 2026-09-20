@@ -2,6 +2,7 @@
 
 use crate::render::Envelope;
 use configctl_core::command::CommandRunner;
+use configctl_core::governor::{GovernorBudgets, parse_bytes, parse_duration};
 use configctl_core::limits::Limits;
 use configctl_discovery::scanner::{ScanOptions, ScanResult, Scanner};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,43 @@ pub fn expand_root(raw: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// v1.1 resource-control flags shared by `scan` and `capture`.
+#[derive(Debug, Clone, Default)]
+pub struct ScanGovernorFlags {
+    pub workers: Option<usize>,
+    pub max_time: Option<String>,
+    pub max_files: Option<u64>,
+    pub max_bytes: Option<String>,
+    pub max_memory: Option<String>,
+    pub follow_mounts: bool,
+    pub scan_network: bool,
+}
+
+/// Build sanitized governor budgets from CLI flags. Every value passes
+/// through hard sanity ceilings — even explicit overrides cannot request
+/// dangerous budgets.
+pub fn governor_from_flags(flags: &ScanGovernorFlags) -> Result<GovernorBudgets, String> {
+    let mut b = GovernorBudgets::default();
+    if let Some(w) = flags.workers {
+        b.max_workers = w;
+    }
+    if let Some(raw) = &flags.max_time {
+        b.max_wall_time = parse_duration(raw)?;
+    }
+    if let Some(n) = flags.max_files {
+        b.max_file_count = n;
+    }
+    if let Some(raw) = &flags.max_bytes {
+        b.max_total_bytes_read = parse_bytes(raw)?;
+    }
+    if let Some(raw) = &flags.max_memory {
+        b.max_memory_bytes = parse_bytes(raw)?;
+    }
+    b.follow_mounts = flags.follow_mounts;
+    b.scan_network_mounts = flags.scan_network;
+    Ok(b.sanitize())
+}
+
 /// Run the scan command. Rendering (json/quiet/verbose) happens in main;
 /// this function returns the raw result + redaction registry + any usage error.
 pub fn run_scan(
@@ -55,6 +93,23 @@ pub fn run_scan(
     _json: bool,
     _quiet: bool,
     _verbose: bool,
+    runner: &dyn CommandRunner,
+) -> ScanOutput {
+    run_scan_with_governor(
+        cli_roots,
+        extra_roots,
+        depth,
+        GovernorBudgets::default(),
+        runner,
+    )
+}
+
+/// Governor-aware scan entry point (v1.1).
+pub fn run_scan_with_governor(
+    cli_roots: &[String],
+    extra_roots: &[String],
+    depth: Option<usize>,
+    governor: GovernorBudgets,
     runner: &dyn CommandRunner,
 ) -> ScanOutput {
     let home = dirs::home_dir();
@@ -113,6 +168,7 @@ pub fn run_scan(
     let opts = ScanOptions {
         roots: roots.clone(),
         limits,
+        governor,
     };
 
     let mut scanner = Scanner::new();
@@ -137,6 +193,7 @@ fn unsafe_result() -> ScanResult {
         git_findings: Vec::new(),
         warnings: Vec::new(),
         statistics: Default::default(),
+        governor: Default::default(),
     }
 }
 
@@ -200,6 +257,18 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
     }
 
     out.push_str("\nNo changes made.\n");
+    // v1.1 governor footer: always visible so bounded scans are observable.
+    let g = &result.governor;
+    match &g.limit_hit {
+        Some(reason) => out.push_str(&format!(
+            "Governor: PARTIAL (budget exhausted: {reason}; files {} bytes {} subprocesses {})\n",
+            g.files, g.bytes_read, g.subprocesses_total
+        )),
+        None => out.push_str(&format!(
+            "Governor: ok (files {} bytes {} subprocesses {} in {}s)\n",
+            g.files, g.bytes_read, g.subprocesses_total, g.elapsed_secs
+        )),
+    }
     out
 }
 

@@ -5,6 +5,7 @@
 //! during the walk. Traversal is iterative (explicit stack) so deep trees
 //! cannot overflow the call stack.
 
+use configctl_core::governor::{GovernorDecision, ResourceGovernor};
 use configctl_core::limits::Limits;
 
 /// Outcome of a single walk.
@@ -17,6 +18,8 @@ pub struct WalkStats {
     pub excluded: usize,
     pub depth_reached: usize,
     pub stop_reason: Option<StopReason>,
+    /// Governor budget that stopped the walk, if any (e.g. `file_budget`).
+    pub governor_limit: Option<String>,
 }
 
 impl WalkStats {
@@ -34,6 +37,9 @@ pub enum StopReason {
     FileCountLimit,
     ByteLimit,
     FindingLimit,
+    /// A central governor budget stopped traversal (see
+    /// [`WalkStats::governor_limit`] for which one).
+    GovernorLimit,
 }
 
 impl StopReason {
@@ -43,6 +49,7 @@ impl StopReason {
             StopReason::FileCountLimit => "file_count_limit",
             StopReason::ByteLimit => "byte_limit",
             StopReason::FindingLimit => "finding_limit",
+            StopReason::GovernorLimit => "governor_limit",
         }
     }
 }
@@ -100,6 +107,7 @@ impl WalkRules {
 pub struct BoundedWalker {
     rules: WalkRules,
     limits: Limits,
+    governor: Option<std::sync::Arc<ResourceGovernor>>,
 }
 
 impl BoundedWalker {
@@ -107,7 +115,15 @@ impl BoundedWalker {
         Self {
             rules: WalkRules::default(),
             limits,
+            governor: None,
         }
+    }
+
+    /// Attach the central resource governor. Budgets are enforced live
+    /// during the walk; exhaustion records `governor_limit` explicitly.
+    pub fn with_governor(mut self, governor: std::sync::Arc<ResourceGovernor>) -> Self {
+        self.governor = Some(governor);
+        self
     }
 
     pub fn with_rules(mut self, rules: WalkRules) -> Self {
@@ -144,6 +160,19 @@ impl BoundedWalker {
                 stats.stop_reason = Some(StopReason::DepthLimit);
                 break;
             }
+            // Governor: wall-clock check every iteration (cheap).
+            if let Some(gov) = &self.governor {
+                if gov.deadline_exceeded() {
+                    stats.stop_reason = Some(StopReason::GovernorLimit);
+                    stats.governor_limit = Some("wall_clock_budget".to_string());
+                    break;
+                }
+                if gov.limit_hit().is_some() {
+                    stats.stop_reason = Some(StopReason::GovernorLimit);
+                    stats.governor_limit = gov.limit_hit().map(|s| s.to_string());
+                    break;
+                }
+            }
 
             let meta = match std::fs::symlink_metadata(&path) {
                 Ok(m) => m,
@@ -167,7 +196,18 @@ impl BoundedWalker {
                 stats.directories += 1;
                 match std::fs::read_dir(&path) {
                     Ok(iter) => {
-                        for child in iter.filter_map(|c| c.ok()) {
+                        let children: Vec<_> = iter.filter_map(|c| c.ok()).collect();
+                        if let Some(gov) = &self.governor {
+                            match gov.account_dir_entries(children.len() as u64) {
+                                GovernorDecision::Proceed => {}
+                                GovernorDecision::LimitReached { reason } => {
+                                    stats.stop_reason = Some(StopReason::GovernorLimit);
+                                    stats.governor_limit = Some(reason.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                        for child in children {
                             stack.push((child.path(), depth + 1));
                         }
                     }
@@ -195,6 +235,18 @@ impl BoundedWalker {
             if total_bytes > self.limits.max_total_bytes {
                 stats.stop_reason = Some(StopReason::ByteLimit);
                 break;
+            }
+
+            // Governor: global file + byte budgets.
+            if let Some(gov) = &self.governor {
+                match gov.account_file(size as u64) {
+                    GovernorDecision::Proceed => {}
+                    GovernorDecision::LimitReached { reason } => {
+                        stats.stop_reason = Some(StopReason::GovernorLimit);
+                        stats.governor_limit = Some(reason.to_string());
+                        break;
+                    }
+                }
             }
 
             let visit = Visit {

@@ -1,6 +1,7 @@
 //! Inventory collector tests: symlinks, cycles, special files, evidence.
 
 use configctl_discovery::inventory::InventoryCollector;
+use configctl_discovery::scanner::{ScanOptions, Scanner};
 use std::os::unix::fs::symlink;
 use std::os::unix::net::UnixListener;
 
@@ -75,6 +76,41 @@ fn skips_require_explicit_reasons() {
     r.finalize(false);
     assert_eq!(r.skipped, 5);
     assert_eq!(r.status, Some(configctl_core::inventory::ScanStatus::Partial));
+}
+
+#[test]
+fn governor_file_budget_stops_scan_with_explicit_reason() {
+    use configctl_core::command::FakeCommandRunner;
+    use configctl_core::governor::GovernorBudgets;
+
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..10 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), b"x").unwrap();
+    }
+    let runner = FakeCommandRunner::new();
+    let mut scanner = Scanner::new();
+    let opts = ScanOptions {
+        roots: vec![dir.path().to_path_buf()],
+        limits: Default::default(),
+        governor: GovernorBudgets {
+            max_file_count: 3,
+            ..GovernorBudgets::default()
+        },
+    };
+    let result = scanner.scan(&opts, &runner);
+    assert!(
+        result
+            .statistics
+            .stop_reasons
+            .iter()
+            .any(|r| r == "governor:file_budget" || r == "governor_limit"),
+        "stop reasons must name the exhausted budget: {:?}",
+        result.statistics.stop_reasons
+    );
+    assert_eq!(
+        result.governor.limit_hit.as_deref(),
+        Some("file_budget")
+    );
 }
 
 #[test]

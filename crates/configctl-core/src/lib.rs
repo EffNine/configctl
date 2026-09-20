@@ -15,6 +15,7 @@ pub mod env_verify;
 pub mod envfile;
 pub mod files;
 pub mod gitmeta;
+pub mod governor;
 pub mod hash;
 pub mod inventory;
 pub mod limits;

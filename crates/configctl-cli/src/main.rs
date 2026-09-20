@@ -47,6 +47,27 @@ enum Cmd {
         /// Increase diagnostic detail
         #[arg(short, long)]
         verbose: bool,
+        /// Worker pool size (clamped to a hard sanity ceiling)
+        #[arg(long, value_name = "N")]
+        workers: Option<usize>,
+        /// Wall-clock budget, e.g. `20m`, `90s`, `2h`
+        #[arg(long = "max-time", value_name = "DURATION")]
+        max_time: Option<String>,
+        /// Maximum files visited across all roots
+        #[arg(long = "max-files", value_name = "N")]
+        max_files: Option<u64>,
+        /// Maximum content bytes read, e.g. `100GiB`, `512MiB`
+        #[arg(long = "max-bytes", value_name = "BYTES")]
+        max_bytes: Option<String>,
+        /// Soft cap for scan-held buffers, e.g. `2GiB`
+        #[arg(long = "max-memory", value_name = "BYTES")]
+        max_memory: Option<String>,
+        /// Allow crossing into other local mounts (default: stay put)
+        #[arg(long = "follow-mounts")]
+        follow_mounts: bool,
+        /// Allow recursive scans of network mounts (default: record only)
+        #[arg(long = "scan-network")]
+        scan_network: bool,
     },
     /// Capture observed state as a declarative, portable profile bundle
     Capture {
@@ -80,6 +101,27 @@ enum Cmd {
         /// Increase diagnostic detail
         #[arg(short, long)]
         verbose: bool,
+        /// Worker pool size (clamped to a hard sanity ceiling)
+        #[arg(long, value_name = "N")]
+        workers: Option<usize>,
+        /// Wall-clock budget, e.g. `20m`, `90s`, `2h`
+        #[arg(long = "max-time", value_name = "DURATION")]
+        max_time: Option<String>,
+        /// Maximum files visited across all roots
+        #[arg(long = "max-files", value_name = "N")]
+        max_files: Option<u64>,
+        /// Maximum content bytes read, e.g. `100GiB`, `512MiB`
+        #[arg(long = "max-bytes", value_name = "BYTES")]
+        max_bytes: Option<String>,
+        /// Soft cap for scan-held buffers, e.g. `2GiB`
+        #[arg(long = "max-memory", value_name = "BYTES")]
+        max_memory: Option<String>,
+        /// Allow crossing into other local mounts (default: stay put)
+        #[arg(long = "follow-mounts")]
+        follow_mounts: bool,
+        /// Allow recursive scans of network mounts (default: record only)
+        #[arg(long = "scan-network")]
+        scan_network: bool,
     },
     /// Show the deterministic diff between a profile and this machine (no mutation)
     Plan {
@@ -324,8 +366,39 @@ fn main() -> ExitCode {
             json,
             quiet,
             verbose,
+            workers,
+            max_time,
+            max_files,
+            max_bytes,
+            max_memory,
+            follow_mounts,
+            scan_network,
         }) => {
-            let out = scan::run_scan(roots, extra_roots, *depth, *json, *quiet, *verbose, &runner);
+            let gov_flags = scan::ScanGovernorFlags {
+                workers: *workers,
+                max_time: max_time.clone(),
+                max_files: *max_files,
+                max_bytes: max_bytes.clone(),
+                max_memory: max_memory.clone(),
+                follow_mounts: *follow_mounts,
+                scan_network: *scan_network,
+            };
+            let governor = match scan::governor_from_flags(&gov_flags) {
+                Ok(b) => b,
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error("scan", &e, "check resource flags")
+                                .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return ExitCode::from(2);
+                }
+            };
+            let out = scan::run_scan_with_governor(roots, extra_roots, *depth, governor, &runner);
             match &out.error_envelope {
                 Some(err) => {
                     if *json {
@@ -368,8 +441,43 @@ fn main() -> ExitCode {
             json,
             quiet,
             verbose,
+            workers,
+            max_time,
+            max_files,
+            max_bytes,
+            max_memory,
+            follow_mounts,
+            scan_network,
         }) => {
-            let out = capture::run_capture(
+            let gov_flags = capture::ScanGovernorFlags {
+                workers: *workers,
+                max_time: max_time.clone(),
+                max_files: *max_files,
+                max_bytes: max_bytes.clone(),
+                max_memory: max_memory.clone(),
+                follow_mounts: *follow_mounts,
+                scan_network: *scan_network,
+            };
+            let governor = match capture::governor_from_flags(&gov_flags) {
+                Ok(b) => b,
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "capture",
+                                &e,
+                                "check resource flags"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return ExitCode::from(2);
+                }
+            };
+            let out = capture::run_capture_with_governor(
                 name.as_deref(),
                 from,
                 extra_roots,
@@ -378,6 +486,7 @@ fn main() -> ExitCode {
                 *depth,
                 *dry_run,
                 None,
+                governor,
                 &runner,
             );
             match &out.error_envelope {

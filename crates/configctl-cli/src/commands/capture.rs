@@ -4,6 +4,7 @@
 //! explicit output directory. `--dry-run` writes nothing.
 
 use crate::commands::scan::{default_roots, expand_root};
+pub use crate::commands::scan::{ScanGovernorFlags, governor_from_flags};
 use configctl_core::capture::{self, CaptureOptions};
 use configctl_core::command::CommandRunner;
 use configctl_core::limits::Limits;
@@ -87,6 +88,34 @@ pub fn run_capture(
     depth: Option<usize>,
     dry_run: bool,
     description: Option<&str>,
+    runner: &dyn CommandRunner,
+) -> CaptureOutput {
+    run_capture_with_governor(
+        name,
+        from_roots,
+        extra_roots,
+        output,
+        force,
+        depth,
+        dry_run,
+        description,
+        configctl_core::governor::GovernorBudgets::default(),
+        runner,
+    )
+}
+
+/// Governor-aware capture entry point (v1.1).
+#[allow(clippy::too_many_arguments)]
+pub fn run_capture_with_governor(
+    name: Option<&str>,
+    from_roots: &[String],
+    extra_roots: &[String],
+    output: Option<&str>,
+    force: bool,
+    depth: Option<usize>,
+    dry_run: bool,
+    description: Option<&str>,
+    governor: configctl_core::governor::GovernorBudgets,
     runner: &dyn CommandRunner,
 ) -> CaptureOutput {
     let home = dirs::home_dir();
@@ -174,6 +203,7 @@ pub fn run_capture(
     let scan_opts = ScanOptions {
         roots: roots.clone(),
         limits: limits.clone(),
+        governor,
     };
     let scan_result = scanner.scan(&scan_opts, runner);
     let registry = scanner.registry().clone();

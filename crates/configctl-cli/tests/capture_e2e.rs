@@ -136,6 +136,7 @@ fn core_capture_to(
     let opts = configctl_discovery::scanner::ScanOptions {
         roots: vec![fixture_root.to_path_buf()],
         limits: Default::default(),
+        governor: Default::default(),
     };
     let scan = scanner.scan(&opts, runner);
     let view = {
