@@ -15,10 +15,12 @@ pub mod config;
 pub mod env;
 pub mod git;
 pub mod inventory;
+pub mod packages;
 pub mod project;
 pub mod scanner;
 pub mod secret;
 pub mod system;
+pub mod toolchain;
 pub mod walker;
 
 pub use scanner::{ScanOptions, ScanResult, ScanStats, Scanner};

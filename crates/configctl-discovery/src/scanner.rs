@@ -6,9 +6,11 @@
 use crate::config::{self, ConfigFileRecord};
 use crate::env::{self, EnvFileRecord, GitStatus};
 use crate::git;
+use crate::packages::{self, PackageInventory};
 use crate::project::{self, ProjectDetection};
 use crate::secret::{self, EntropyScorer};
 use crate::system::{self, SystemInfo};
+use crate::toolchain::{self, ToolchainInventory};
 use crate::walker::{BoundedWalker, StopReason, Visit};
 use configctl_core::command::CommandRunner;
 use configctl_core::governor::{GovernorBudgets, GovernorSnapshot, ResourceGovernor};
@@ -53,6 +55,12 @@ pub struct ScanResult {
     pub statistics: ScanStats,
     /// v1.1 governor snapshot (budgets consumed, limit hit, pressure).
     pub governor: GovernorSnapshot,
+    /// v1.1 package ecosystem inventory (capped lists + complete counts).
+    #[serde(default)]
+    pub package_inventory: PackageInventory,
+    /// v1.1 toolchain inventory (capped lists + complete counts).
+    #[serde(default)]
+    pub toolchain: ToolchainInventory,
 }
 
 impl ScanResult {
@@ -103,6 +111,10 @@ pub struct ScanStats {
     pub excluded_paths: usize,
     pub files_visited: usize,
     pub stop_reasons: Vec<String>,
+    /// v1.1: packages observed across all managers.
+    pub packages_found: usize,
+    /// v1.1: executables discovered on PATH.
+    pub executables_found: usize,
 }
 
 /// The scan service.
@@ -337,6 +349,25 @@ impl Scanner {
             }
         }
 
+        // 8. v1.1 package + toolchain provenance. Runs after git tracking so
+        //    canned test outputs are consumed by their intended probes first.
+        //    Every probe is governor-bounded; failures are recorded, never fatal.
+        let mut package_inventory = packages::collect_packages(&governor, runner);
+        let mut toolchain_inv = toolchain::discover_executables(&governor, runner);
+        // Bound report size: counts stay complete, lists truncate explicitly.
+        if toolchain_inv.executables.len() > 5000 {
+            toolchain_inv.executables.truncate(5000);
+            toolchain_inv.truncated = true;
+            toolchain_inv
+                .warnings
+                .push("executable report list truncated to 5000 entries".into());
+        }
+        warnings.extend(package_inventory.warnings.iter().cloned());
+        warnings.extend(toolchain_inv.warnings.iter().cloned());
+        if let Some(hit) = governor.limit_hit() {
+            warnings.push(format!("governor budget exhausted: {hit}"));
+        }
+
         // 8. Diagnostics (kept for future use; silence unused warnings)
         let _scorer = EntropyScorer::default();
         let _ = secret::NAME_LEXICON;
@@ -358,6 +389,8 @@ impl Scanner {
             excluded_paths: walk_stats_total.excluded,
             files_visited,
             stop_reasons,
+            packages_found: package_inventory.total,
+            executables_found: toolchain_inv.total,
         };
 
         let timestamp = rfc3339_now();
@@ -386,6 +419,8 @@ impl Scanner {
             warnings,
             statistics: stats,
             governor: governor.snapshot(),
+            package_inventory,
+            toolchain: toolchain_inv,
         }
     }
 }

@@ -388,6 +388,28 @@ impl Drop for SubprocessGuard {
     }
 }
 
+/// Run one subprocess under governor budgets: acquires a spawn slot (fails
+/// closed when the subprocess budget is exhausted), applies the governor's
+/// timeout + output cap, and releases the live slot when done.
+///
+/// This is the only path discovery subsystems should use to spawn tools.
+pub fn governed_run(
+    governor: &Arc<ResourceGovernor>,
+    runner: &dyn crate::command::CommandRunner,
+    program: impl Into<std::path::PathBuf>,
+    args: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<crate::command::CommandOutput, crate::command::CommandError> {
+    let _guard = match governor.acquire_subprocess() {
+        Some(g) => g,
+        None => return Err(crate::command::CommandError::SpawnFailed),
+    };
+    if governor.deadline_exceeded() {
+        return Err(crate::command::CommandError::SpawnFailed);
+    }
+    let req = governor.subprocess_request(program, args);
+    runner.run(&req)
+}
+
 /// Serializable governor state for scan reports.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(default)]

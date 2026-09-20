@@ -194,6 +194,8 @@ fn unsafe_result() -> ScanResult {
         warnings: Vec::new(),
         statistics: Default::default(),
         governor: Default::default(),
+        package_inventory: Default::default(),
+        toolchain: Default::default(),
     }
 }
 
@@ -223,6 +225,15 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
         out.push_str(&format!(
             "Config files\n  {} discovered\n\n",
             s.config_files_found
+        ));
+        out.push_str(&format!(
+            "Packages\n  {} observed across {} managers\n\n",
+            s.packages_found,
+            result.package_inventory.managers.iter().filter(|m| m.available).count()
+        ));
+        out.push_str(&format!(
+            "Executables\n  {} discovered on PATH ({} version-probed)\n\n",
+            s.executables_found, result.toolchain.version_probed
         ));
     }
 
