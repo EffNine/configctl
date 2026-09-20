@@ -14,6 +14,8 @@ $ configctl profile validate ./work  # all errors listed, no mutation
 $ configctl plan ./work              # deterministic diff, persisted + hashed
 $ configctl apply --last --yes       # newest plan: journaled, locked, backed up
 $ configctl verify ./work            # MATCH / DRIFT / MISSING / ...
+$ configctl status [profile]         # one-page state + drift summary
+$ configctl why ~/.gitconfig         # ownership, last operation, backup
 $ configctl rollback --plan <plan-id> --yes   # restore from backups
 $ configctl doctor                   # state + interrupted-apply diagnostics
 $ configctl guide [topic]            # plain-language help while you work

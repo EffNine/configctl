@@ -6,7 +6,8 @@
 
 use clap::{Parser, Subcommand};
 use configctl_cli::commands::{
-    apply, audit, capture, doctor, env, init, plan, profile, rollback, scan, secrets, verify,
+    apply, audit, capture, doctor, env, init, plan, profile, rollback, scan, secrets, status,
+    verify, why,
 };
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
@@ -246,6 +247,24 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ProfileCmd,
     },
+    /// One-page summary of state and profile drift (read-only)
+    Status {
+        /// Profile name or bundle path (optional; adds drift counts)
+        #[arg(value_name = "PROFILE")]
+        profile: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explain ownership and history for one file target (read-only)
+    Why {
+        /// File target, e.g. `~/.gitconfig`
+        #[arg(value_name = "TARGET")]
+        target: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Plain-language help while you work: `configctl guide [topic]`
     Guide {
         /// Topic name (omit to list every topic)
@@ -425,6 +444,8 @@ fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
         Some(Cmd::Audit { json, .. }) => (Topic::Audit, *json, false),
         Some(Cmd::Doctor { json }) => (Topic::Doctor, *json, false),
         Some(Cmd::Init { json, .. }) => (Topic::Start, *json, false),
+        Some(Cmd::Status { json, .. }) => (Topic::Status, *json, false),
+        Some(Cmd::Why { json, .. }) => (Topic::Why, *json, false),
         Some(Cmd::Profile { cmd }) => match cmd {
             ProfileCmd::List { json }
             | ProfileCmd::Show { json, .. }
@@ -1389,6 +1410,65 @@ fn run(cli: Cli) -> ExitCode {
                 }
             },
         },
+        Some(Cmd::Status { profile, json }) => {
+            let out =
+                status::run_status(profile.as_deref(), cli.state_dir.as_deref(), None, &runner);
+            if let Some(e) = &out.error {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::error(
+                            "status",
+                            e,
+                            "fix the profile path and retry"
+                        )
+                        .to_json()
+                    );
+                } else {
+                    eprintln!("error: {e}");
+                }
+                finish(out.exit_code as u8)
+            } else {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("status", out.data).to_json()
+                    );
+                } else {
+                    print!("{}", out.text);
+                }
+                finish(0)
+            }
+        }
+        Some(Cmd::Why { target, json }) => {
+            let out = why::run_why(target, cli.state_dir.as_deref(), None);
+            if let Some(e) = &out.error {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::error(
+                            "why",
+                            e,
+                            "pass a file target under $HOME, e.g. `~/.gitconfig`"
+                        )
+                        .to_json()
+                    );
+                } else {
+                    eprintln!("error: {e}");
+                }
+                finish(out.exit_code as u8)
+            } else {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("why", out.data).to_json()
+                    );
+                } else {
+                    print!("{}", out.text);
+                }
+                finish(0)
+            }
+        }
     };
     code
 }

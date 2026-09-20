@@ -31,12 +31,14 @@ pub enum Topic {
     Secrets,
     Audit,
     Doctor,
+    Status,
+    Why,
     ExitCodes,
     Glossary,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 14] = [
+    pub const ALL: [Topic; 16] = [
         Topic::Start,
         Topic::Scan,
         Topic::Capture,
@@ -49,6 +51,8 @@ impl Topic {
         Topic::Secrets,
         Topic::Audit,
         Topic::Doctor,
+        Topic::Status,
+        Topic::Why,
         Topic::ExitCodes,
         Topic::Glossary,
     ];
@@ -67,6 +71,8 @@ impl Topic {
             Topic::Secrets => "secrets",
             Topic::Audit => "audit",
             Topic::Doctor => "doctor",
+            Topic::Status => "status",
+            Topic::Why => "why",
             Topic::ExitCodes => "exit-codes",
             Topic::Glossary => "glossary",
         }
@@ -86,6 +92,8 @@ impl Topic {
             Topic::Secrets => "References, never values",
             Topic::Audit => "Safety check for a repository",
             Topic::Doctor => "Diagnostics and interrupted-apply recovery",
+            Topic::Status => "One-page summary of state and drift",
+            Topic::Why => "Who owns a file and what changed it last",
             Topic::ExitCodes => "What each exit code means",
             Topic::Glossary => "Words used across configctl",
         }
@@ -107,6 +115,8 @@ impl Topic {
             "secrets" | "secret" => Topic::Secrets,
             "audit" => Topic::Audit,
             "doctor" => Topic::Doctor,
+            "status" => Topic::Status,
+            "why" | "owner" => Topic::Why,
             "exit-codes" | "exits" | "exit" => Topic::ExitCodes,
             "glossary" => Topic::Glossary,
             _ => return None,
@@ -127,6 +137,8 @@ impl Topic {
             Topic::Secrets => include_str!("guide/secrets.md"),
             Topic::Audit => include_str!("guide/audit.md"),
             Topic::Doctor => include_str!("guide/doctor.md"),
+            Topic::Status => include_str!("guide/status.md"),
+            Topic::Why => include_str!("guide/why.md"),
             Topic::ExitCodes => include_str!("guide/exit-codes.md"),
             Topic::Glossary => include_str!("guide/glossary.md"),
         }
@@ -211,6 +223,12 @@ pub fn explain(topic: Topic) -> &'static str {
         Topic::Doctor => {
             "what this means: diagnostics only. If an apply was interrupted, doctor says what can be recovered."
         }
+        Topic::Status => {
+            "what this means: a summary, not an action. Counts come from the same checks as verify; DRIFT/MISSING tell you to plan and apply."
+        }
+        Topic::Why => {
+            "what this means: ownership comes from the state store; the last operation comes from the newest plan that touched this file. Nothing was changed."
+        }
         Topic::ExitCodes => {
             "what this means: exit codes are the script contract; 4 and 5 mean nothing changed, 3 means the machine differs from the profile."
         }
@@ -229,6 +247,7 @@ pub fn hint(topic: Topic) -> Option<&'static str> {
         Topic::Plan => Some("apply this plan with `configctl apply --last`"),
         Topic::Apply => Some("check the result with `configctl verify <profile>`"),
         Topic::Verify => Some("drift? `configctl plan <profile>` shows how to fix it"),
+        Topic::Status => Some("explain one file with `configctl why <file>`"),
         Topic::Doctor => Some("exit codes are explained in `configctl guide exit-codes`"),
         _ => None,
     }

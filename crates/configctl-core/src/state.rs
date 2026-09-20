@@ -463,6 +463,40 @@ pub fn record_owned(
     Ok(())
 }
 
+/// One ownership record from the `resources` table.
+#[derive(Debug, Clone)]
+pub struct ResourceRow {
+    pub kind: String,
+    pub locator: String,
+    pub owner_profile: Option<String>,
+    pub fingerprint: Option<String>,
+    pub updated_at: i64,
+}
+
+/// Ownership lookup for a single `(kind, locator)`. Missing store -> `None`.
+pub fn find_resource(dir: &Path, kind: &str, locator: &str) -> Result<Option<ResourceRow>, String> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let conn = open_db(dir)?;
+    conn.query_row(
+        "SELECT kind, locator, owner_profile, fingerprint, updated_at \
+         FROM resources WHERE kind = ?1 AND locator = ?2",
+        params![kind, locator],
+        |r| {
+            Ok(ResourceRow {
+                kind: r.get(0)?,
+                locator: r.get(1)?,
+                owner_profile: r.get(2)?,
+                fingerprint: r.get(3)?,
+                updated_at: r.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("query resource: {e:?}"))
+}
+
 /// Ownership snapshot for one profile.
 pub fn ownership_for_profile(
     dir: &Path,

@@ -507,6 +507,32 @@ Topics:
   …
 ```
 
+### 2.14 `configctl status`
+
+```
+configctl status [PROFILE] [--json]
+```
+
+One-page read-only summary. Without a profile: state directory, plan totals
+by status, and the newest plan (with an apply hint when it is not applied).
+With a profile: the same plus `MATCH`/`DRIFT`/`MISSING`/`UNMANAGED`/
+`UNKNOWN`/`unsupported` counts from verification.
+
+Informational: exits 0 when it can read; an unloadable profile is exit 2.
+
+### 2.15 `configctl why`
+
+```
+configctl why <TARGET> [--json]
+```
+
+Read-only ownership and history for one file target (`~/...`; absolute paths
+under `$HOME` are normalized to the portable form). Shows disk facts, the
+owning profile, the recorded content fingerprint, and the newest plan
+operation touching the target (kind, journal phase, backup hash) with the
+rollback command when applicable. Targets outside `$HOME` are refused with
+exit 2.
+
 ---
 
 ## 3. Output rules

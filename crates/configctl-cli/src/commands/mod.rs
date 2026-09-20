@@ -12,4 +12,6 @@ pub mod profile;
 pub mod rollback;
 pub mod scan;
 pub mod secrets;
+pub mod status;
 pub mod verify;
+pub mod why;
