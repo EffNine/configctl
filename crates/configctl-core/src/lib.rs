@@ -26,6 +26,7 @@ pub mod paths;
 pub mod plan;
 pub mod profile;
 pub mod profile_load;
+pub mod profile_migrate;
 pub mod redact;
 pub mod rollback;
 pub mod secrets;

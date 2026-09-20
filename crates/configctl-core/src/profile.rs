@@ -7,14 +7,23 @@
 use crate::paths;
 use serde::{Deserialize, Serialize};
 
-/// Current profile schema version. Files with any other version are refused.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Current profile schema version. v1 documents remain readable through
+/// the compatibility layer (see [`is_supported_schema_version`]); new
+/// captures always emit [`SCHEMA_VERSION`].
+pub const SCHEMA_VERSION: u32 = 2;
+/// Previous schema version (v1.0.x profiles).
+pub const SCHEMA_VERSION_V1: u32 = 1;
+
+/// True for schema versions this build can read and validate.
+pub fn is_supported_schema_version(v: u32) -> bool {
+    v == SCHEMA_VERSION || v == SCHEMA_VERSION_V1
+}
 
 /// A full declarative profile (maps to `profile.toml`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// Must equal [`SCHEMA_VERSION`].
+    /// Must be a supported schema version (see [`is_supported_schema_version`]).
     pub schema_version: u32,
     /// Profile name (`[a-z0-9][a-z0-9-_]{0,63}`).
     pub name: String,
@@ -30,16 +39,28 @@ pub struct Profile {
     /// Platform the profile was captured on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<Platform>,
+    /// Machine identity context (v2; informational).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineSection>,
+    /// Hardware context (v2; informational, never reproduced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<HardwareSection>,
     /// Desired packages (names only; versions live in `packages.lock.toml`).
     #[serde(default)]
     pub packages: Packages,
+    /// Version-probed toolchain entries (v2).
+    #[serde(default)]
+    pub toolchains: Vec<ToolchainEntry>,
     /// Managed files.
     #[serde(default)]
     pub files: Vec<FileEntry>,
-    /// Global non-secret literals (P2 emits none; reserved for P3+).
+    /// Managed directories (v2; project roots and config dirs).
+    #[serde(default)]
+    pub directories: Vec<DirectoryEntry>,
+    /// Global non-secret literals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<std::collections::BTreeMap<String, EnvLiteral>>,
-    /// User services (P2 emits none; discovery has no service probing yet).
+    /// User services.
     #[serde(default)]
     pub services: Vec<ServiceEntry>,
     /// Git configuration metadata (never credentials).
@@ -48,6 +69,15 @@ pub struct Profile {
     /// Associated projects.
     #[serde(default)]
     pub projects: Vec<ProjectEntry>,
+    /// Recorded mounts (v2; informational, never traversed on apply).
+    #[serde(default)]
+    pub mounts: Vec<MountEntry>,
+    /// Notable executables with provenance (v2; observed, not installed).
+    #[serde(default)]
+    pub executables: Vec<ExecutableEntry>,
+    /// Capture provenance (v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ProvenanceSection>,
 }
 
 /// Capture metadata: informational only, never affects convergence.
@@ -83,6 +113,102 @@ pub struct Packages {
     /// Sorted, unique apt package names.
     #[serde(default)]
     pub apt: Vec<String>,
+    /// v2: per-manager package names (`cargo`, `npm`, `pip`, `mise`, …).
+    /// Sorted, unique each. apt stays top-level for v1 compatibility.
+    #[serde(default)]
+    pub other: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// Machine identity context (v2; informational only).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MachineSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_filesystem: Option<String>,
+}
+
+/// Hardware context (v2; informational, never reproduced).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HardwareSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_cpus: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_ram_kib: Option<u64>,
+    #[serde(default)]
+    pub gpus: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cuda: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rocm: Option<bool>,
+    #[serde(default)]
+    pub compilers: Vec<String>,
+}
+
+/// One toolchain entry (v2): a version-probed executable + provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolchainEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Manager provenance (`cargo`, `system`, `mise`, …, or `unknown`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+}
+
+/// One managed directory (v2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DirectoryEntry {
+    /// Portable path (`~/...` preferred; absolute accepted when traversal-free).
+    pub path: String,
+    /// `project` | `config`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<String>,
+}
+
+/// One recorded mount (v2; informational, never traversed on apply).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MountEntry {
+    pub mountpoint: String,
+    pub fstype: String,
+    #[serde(default)]
+    pub remote: bool,
+    #[serde(default)]
+    pub pseudo: bool,
+}
+
+/// One notable executable observation (v2; never installed from this).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutableEntry {
+    pub name: String,
+    /// Provenance (`cargo`, `system`, …, or `unknown`).
+    pub provenance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// Capture provenance (v2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProvenanceSection {
+    /// Producer subsystem (e.g. `scan`).
+    pub source: String,
+    /// Previous schema version when this profile was migrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_from: Option<u32>,
 }
 
 /// One managed file.
@@ -96,6 +222,15 @@ pub struct FileEntry {
     /// Optional octal mode string (`"0644"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// v2 provenance: where the file was captured from (`home`, `project`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// v2 provenance: discovering subsystem (e.g. `filesystem.discovery`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_by: Option<String>,
+    /// v2 classification at capture time (e.g. `portable`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<String>,
 }
 
 /// A global literal environment value (non-secret only).
@@ -121,6 +256,12 @@ pub struct ServiceEntry {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running: Option<bool>,
+    /// v2 scope: `user` (default) or `system`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// v2 classification at capture time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<String>,
 }
 
 /// Safe Git configuration metadata (never credential contents).
@@ -165,6 +306,12 @@ pub struct ProjectEntry {
     /// Basenames of relevant config files (metadata only).
     #[serde(default)]
     pub config_files: Vec<String>,
+    /// v2: discovery markers (`Cargo.toml`, `.github`, …).
+    #[serde(default)]
+    pub markers: Vec<String>,
+    /// v2: content role counts (`source → 42`, `generated → 7`, …).
+    #[serde(default)]
+    pub roles: std::collections::BTreeMap<String, u64>,
 }
 
 /// Per-project environment schema (maps to `env/<project>.toml`).
@@ -252,12 +399,19 @@ impl Profile {
             configctl_version: None,
             metadata: None,
             platform: None,
+            machine: None,
+            hardware: None,
             packages: Packages::default(),
+            toolchains: Vec::new(),
             files: Vec::new(),
+            directories: Vec::new(),
             environment: None,
             services: Vec::new(),
             git: None,
             projects: Vec::new(),
+            mounts: Vec::new(),
+            executables: Vec::new(),
+            provenance: None,
         }
     }
 
@@ -265,8 +419,19 @@ impl Profile {
     pub fn canonicalize(&mut self) {
         self.packages.apt.sort();
         self.packages.apt.dedup();
+        for names in self.packages.other.values_mut() {
+            names.sort();
+            names.dedup();
+        }
+        self.toolchains.sort_by(|a, b| a.name.cmp(&b.name));
         self.files.sort_by(|a, b| a.target.cmp(&b.target));
+        self.directories.sort_by(|a, b| a.path.cmp(&b.path));
         self.services.sort_by(|a, b| a.name.cmp(&b.name));
+        self.mounts.sort_by(|a, b| a.mountpoint.cmp(&b.mountpoint));
+        self.executables.sort_by(|a, b| a.name.cmp(&b.name));
+        self.hardware
+            .as_mut()
+            .map(|h| h.compilers.sort());
         self.projects.sort_by(|a, b| a.path.cmp(&b.path));
         for p in &mut self.projects {
             p.ecosystems.sort();
@@ -275,6 +440,8 @@ impl Profile {
             p.env_files.dedup();
             p.config_files.sort();
             p.config_files.dedup();
+            p.markers.sort();
+            p.markers.dedup();
         }
     }
 
@@ -282,9 +449,9 @@ impl Profile {
     pub fn validate(&self) -> Vec<String> {
         let mut errors: Vec<String> = Vec::new();
 
-        if self.schema_version != SCHEMA_VERSION {
+        if !is_supported_schema_version(self.schema_version) {
             errors.push(format!(
-                "unsupported profile schema_version {} (this build supports {})",
+                "unsupported profile schema_version {} (this build supports 1 and {})",
                 self.schema_version, SCHEMA_VERSION
             ));
         }
@@ -318,20 +485,57 @@ impl Profile {
             }
         }
 
-        // Packages.
+        // Packages (v1 apt + v2 per-manager).
         {
             let mut seen = std::collections::BTreeSet::new();
             for name in &self.packages.apt {
                 if let Err(e) = paths::validate_package_name(name) {
                     errors.push(e);
                 }
-                if !seen.insert(name.clone()) {
+                if !seen.insert(format!("apt:{name}")) {
                     errors.push(format!("duplicate package entry: {name:?}"));
+                }
+            }
+            for (manager, names) in &self.packages.other {
+                if manager.is_empty()
+                    || manager.len() > 32
+                    || !manager
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+                {
+                    errors.push(format!("invalid package manager: {manager:?}"));
+                    continue;
+                }
+                for name in names {
+                    if name.is_empty() || name.len() > 128 || name.contains('\0') {
+                        errors.push(format!("invalid {manager} package name: {name:?}"));
+                    }
+                    if !seen.insert(format!("{manager}:{name}")) {
+                        errors.push(format!("duplicate package entry: {manager}:{name:?}"));
+                    }
                 }
             }
         }
 
-        // Files.
+        // Toolchains (v2).
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for t in &self.toolchains {
+                if t.name.is_empty() || t.name.len() > 128 || t.name.contains('\0') || t.name.contains('/') {
+                    errors.push(format!("invalid toolchain name: {:?}", t.name));
+                }
+                if let Some(v) = &t.version {
+                    if v.len() > 200 || v.contains('\0') {
+                        errors.push(format!("invalid toolchain version for {:?}", t.name));
+                    }
+                }
+                if !seen.insert(t.name.clone()) {
+                    errors.push(format!("duplicate toolchain entry: {:?}", t.name));
+                }
+            }
+        }
+
+        // Files (v2 provenance fields are informational: length + NUL checks).
         {
             let mut seen = std::collections::BTreeSet::new();
             for f in &self.files {
@@ -346,8 +550,40 @@ impl Profile {
                         errors.push(format!("file {:?}: {e}", f.target));
                     }
                 }
+                for (label, v) in [
+                    ("origin", f.origin.as_deref()),
+                    ("detected_by", f.detected_by.as_deref()),
+                    ("classification", f.classification.as_deref()),
+                ] {
+                    if let Some(s) = v {
+                        if s.is_empty() || s.len() > 128 || s.contains('\0') {
+                            errors.push(format!("file {:?}: invalid {label}", f.target));
+                        }
+                    }
+                }
                 if !seen.insert(f.target.clone()) {
                     errors.push(format!("duplicate file target: {:?}", f.target));
+                }
+            }
+        }
+
+        // Directories (v2).
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for d in &self.directories {
+                if let Err(e) = paths::validate_project_path(&d.path) {
+                    errors.push(format!("directory: {e}"));
+                }
+                if !matches!(d.kind.as_str(), "project" | "config") {
+                    errors.push(format!("directory {:?}: invalid kind {:?}", d.path, d.kind));
+                }
+                if let Some(c) = &d.classification {
+                    if c.is_empty() || c.len() > 64 || c.contains('\0') {
+                        errors.push(format!("directory {:?}: invalid classification", d.path));
+                    }
+                }
+                if !seen.insert(d.path.clone()) {
+                    errors.push(format!("duplicate directory: {:?}", d.path));
                 }
             }
         }
@@ -378,17 +614,28 @@ impl Profile {
             }
         }
 
-        // Services.
+        // Services (v1 `.service` user units plus v2 scopes/unit types).
         {
             let mut seen = std::collections::BTreeSet::new();
             for s in &self.services {
                 if s.name.is_empty() || s.name.contains('\0') || s.name.contains("..") {
                     errors.push(format!("invalid service name: {:?}", s.name));
-                } else if !s.name.ends_with(".service") {
+                } else if ![".service", ".timer", ".socket", ".target", ".path"]
+                    .iter()
+                    .any(|suffix| s.name.ends_with(suffix))
+                {
                     errors.push(format!(
-                        "unsupported service unit {:?}: v1 restricts to `.service` user units",
+                        "unsupported service unit {:?}: expected a systemd unit suffix",
                         s.name
                     ));
+                }
+                if let Some(scope) = &s.scope {
+                    if !matches!(scope.as_str(), "user" | "system") {
+                        errors.push(format!(
+                            "service {:?}: invalid scope {scope:?} (expected `user` or `system`)",
+                            s.name
+                        ));
+                    }
                 }
                 if !seen.insert(s.name.clone()) {
                     errors.push(format!("duplicate service entry: {:?}", s.name));
@@ -444,6 +691,52 @@ impl Profile {
                 if !seen_name.insert(p.name.clone()) {
                     errors.push(format!("duplicate project name: {:?}", p.name));
                 }
+                for m in &p.markers {
+                    if m.is_empty() || m.len() > 128 || m.contains('\0') {
+                        errors.push(format!("project {:?}: invalid marker {m:?}", p.name));
+                    }
+                }
+                for (role, count) in &p.roles {
+                    if role.is_empty() || role.len() > 64 || *count > 100_000_000 {
+                        errors.push(format!("project {:?}: invalid role entry {role:?}", p.name));
+                    }
+                }
+            }
+        }
+
+        // Mounts (v2; informational).
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for m in &self.mounts {
+                if !m.mountpoint.starts_with('/') || m.mountpoint.contains('\0') {
+                    errors.push(format!("invalid mountpoint: {:?}", m.mountpoint));
+                }
+                if m.fstype.is_empty() || m.fstype.len() > 32 || m.fstype.contains('\0') {
+                    errors.push(format!("invalid fstype for {:?}", m.mountpoint));
+                }
+                if !seen.insert(m.mountpoint.clone()) {
+                    errors.push(format!("duplicate mountpoint: {:?}", m.mountpoint));
+                }
+            }
+        }
+
+        // Executables (v2; observed only).
+        {
+            let mut seen = std::collections::BTreeSet::new();
+            for e in &self.executables {
+                if e.name.is_empty()
+                    || e.name.len() > 128
+                    || e.name.contains('\0')
+                    || e.name.contains('/')
+                {
+                    errors.push(format!("invalid executable name: {:?}", e.name));
+                }
+                if e.provenance.is_empty() || e.provenance.len() > 64 {
+                    errors.push(format!("invalid provenance for {:?}", e.name));
+                }
+                if !seen.insert(e.name.clone()) {
+                    errors.push(format!("duplicate executable entry: {:?}", e.name));
+                }
             }
         }
 
@@ -467,9 +760,9 @@ impl EnvSchema {
     /// Validate an env schema. Returns all errors.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.schema_version != SCHEMA_VERSION {
+        if !is_supported_schema_version(self.schema_version) {
             errors.push(format!(
-                "unsupported env schema_version {} (this build supports {})",
+                "unsupported env schema_version {} (this build supports 1 and {})",
                 self.schema_version, SCHEMA_VERSION
             ));
         }
@@ -536,9 +829,9 @@ impl SecretManifest {
     /// Validate the manifest. Returns all errors.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.schema_version != SCHEMA_VERSION {
+        if !is_supported_schema_version(self.schema_version) {
             errors.push(format!(
-                "unsupported secrets schema_version {} (this build supports {})",
+                "unsupported secrets schema_version {} (this build supports 1 and {})",
                 self.schema_version, SCHEMA_VERSION
             ));
         }

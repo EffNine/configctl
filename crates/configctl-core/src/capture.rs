@@ -20,8 +20,9 @@ use crate::limits::Limits;
 use crate::packages;
 use crate::paths;
 use crate::profile::{
-    EnvSchema, FileEntry, GitConfig, Metadata, PackagesLock, Platform, Profile, ProjectEntry,
-    SecretManifest, SCHEMA_VERSION,
+    DirectoryEntry, EnvSchema, ExecutableEntry, FileEntry, GitConfig, HardwareSection,
+    MachineSection, Metadata, MountEntry, PackagesLock, Platform, Profile, ProjectEntry,
+    ProvenanceSection, SecretManifest, ToolchainEntry, SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -313,6 +314,16 @@ pub fn run_capture(
             env_schema: env_schema_ref,
             env_files,
             config_files,
+            markers: scan
+                .project_detail
+                .get(&p.name)
+                .map(|(m, _)| m.clone())
+                .unwrap_or_default(),
+            roles: scan
+                .project_detail
+                .get(&p.name)
+                .map(|(_, r)| r.iter().cloned().collect())
+                .unwrap_or_default(),
         });
     }
     projects.sort_by(|a, b| a.path.cmp(&b.path));
@@ -324,6 +335,13 @@ pub fn run_capture(
             target: p.target.clone(),
             source: p.bundle_rel.clone(),
             mode: Some(p.mode.clone()),
+            origin: Some(if p.target.starts_with("~/") {
+                "home".to_string()
+            } else {
+                "absolute".to_string()
+            }),
+            detected_by: Some("filesystem.discovery".to_string()),
+            classification: None,
         })
         .collect();
     file_entries.sort_by(|a, b| a.target.cmp(&b.target));
@@ -333,8 +351,68 @@ pub fn run_capture(
         os: "linux".into(),
         arch: std::env::consts::ARCH.to_string(),
         distro: scan.distro.clone(),
-        kernel: None,
+        kernel: scan.machine.as_ref().and_then(|m| m.kernel.clone()),
     };
+
+    // --- v2 sections (all informational; plan/apply semantics unchanged) ---
+    let machine = scan.machine.as_ref().map(|m| MachineSection {
+        hostname: None,
+        kernel: m.kernel.clone(),
+        boot_mode: m.boot_mode.clone().filter(|s| !s.is_empty()),
+        root_filesystem: m.root_filesystem.clone(),
+    });
+    let hardware = scan.hardware.as_ref().map(|h| HardwareSection {
+        cpu_model: h.cpu_model.clone(),
+        logical_cpus: h.logical_cpus,
+        total_ram_kib: h.total_ram_kib,
+        gpus: h.gpus.clone(),
+        cuda: h.cuda,
+        rocm: h.rocm,
+        compilers: h.compilers.clone(),
+    });
+    let mut packages_other: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (manager, name) in &scan.packages_other {
+        packages_other
+            .entry(manager.clone())
+            .or_default()
+            .push(name.clone());
+    }
+    let toolchains: Vec<ToolchainEntry> = scan
+        .toolchains
+        .iter()
+        .map(|t| ToolchainEntry {
+            name: t.name.clone(),
+            version: t.version.clone(),
+            provenance: Some(t.provenance.clone()),
+        })
+        .collect();
+    let directories: Vec<DirectoryEntry> = projects
+        .iter()
+        .map(|p| DirectoryEntry {
+            path: p.path.clone(),
+            kind: "project".to_string(),
+            classification: None,
+        })
+        .collect();
+    let mounts: Vec<MountEntry> = scan
+        .mounts
+        .iter()
+        .map(|m| MountEntry {
+            mountpoint: m.mountpoint.clone(),
+            fstype: m.fstype.clone(),
+            remote: m.remote,
+            pseudo: m.pseudo,
+        })
+        .collect();
+    let executables: Vec<ExecutableEntry> = scan
+        .executables
+        .iter()
+        .map(|e| ExecutableEntry {
+            name: e.name.clone(),
+            provenance: e.provenance.clone(),
+            version: e.version.clone(),
+        })
+        .collect();
 
     // --- Lock file (record-and-report) ---
     let mut lock_apt: BTreeMap<String, String> = BTreeMap::new();
@@ -352,12 +430,25 @@ pub fn run_capture(
             package_policy: Some(packages::POLICY_ID.into()),
         }),
         platform: Some(platform),
-        packages: crate::profile::Packages { apt: apt_names },
+        machine,
+        hardware,
+        packages: crate::profile::Packages {
+            apt: apt_names,
+            other: packages_other,
+        },
+        toolchains,
         files: file_entries,
+        directories,
         environment: None,
         services: Vec::new(),
         git,
         projects,
+        mounts,
+        executables,
+        provenance: Some(ProvenanceSection {
+            source: "scan".to_string(),
+            migrated_from: None,
+        }),
     };
     profile.canonicalize();
 
@@ -669,6 +760,58 @@ pub mod configctl_discovery_stub {
         pub distro: Option<String>,
         pub excluded_paths: usize,
         pub warnings: Vec<String>,
+        /// v1.1 machine context (populated by the CLI adapter; `None`
+        /// preserves v1 behavior).
+        pub machine: Option<MachineView>,
+        pub hardware: Option<HardwareView>,
+        /// (manager, name) pairs beyond apt.
+        pub packages_other: Vec<(String, String)>,
+        pub toolchains: Vec<ToolchainView>,
+        pub mounts: Vec<MountView>,
+        pub executables: Vec<ExecutableView>,
+        /// project name → (markers, role counts).
+        pub project_detail: std::collections::BTreeMap<String, (Vec<String>, Vec<(String, u64)>)>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct MachineView {
+        pub hostname: Option<String>,
+        pub kernel: Option<String>,
+        pub boot_mode: Option<String>,
+        pub root_filesystem: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct HardwareView {
+        pub cpu_model: Option<String>,
+        pub logical_cpus: Option<u32>,
+        pub total_ram_kib: Option<u64>,
+        pub gpus: Vec<String>,
+        pub cuda: Option<bool>,
+        pub rocm: Option<bool>,
+        pub compilers: Vec<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ToolchainView {
+        pub name: String,
+        pub version: Option<String>,
+        pub provenance: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MountView {
+        pub mountpoint: String,
+        pub fstype: String,
+        pub remote: bool,
+        pub pseudo: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ExecutableView {
+        pub name: String,
+        pub version: Option<String>,
+        pub provenance: String,
     }
 
     #[derive(Debug, Clone)]

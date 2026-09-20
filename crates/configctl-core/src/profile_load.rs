@@ -16,7 +16,7 @@
 //! validates everything fail-closed.
 
 use crate::paths;
-use crate::profile::{EnvSchema, PackagesLock, Profile, SecretManifest, SCHEMA_VERSION};
+use crate::profile::{EnvSchema, PackagesLock, Profile, SecretManifest};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -110,7 +110,7 @@ pub fn load_profile_dir(dir: &Path) -> Result<LoadedProfile, String> {
                 .map_err(|e| format!("read packages.lock.toml: {e:?}"))?;
             match PackagesLock::from_toml(&text) {
                 Ok(l) => {
-                    if l.schema_version != SCHEMA_VERSION {
+                    if !crate::profile::is_supported_schema_version(l.schema_version) {
                         errors.push(format!(
                             "unsupported packages lock schema_version {}",
                             l.schema_version

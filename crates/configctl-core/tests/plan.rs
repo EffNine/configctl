@@ -14,17 +14,25 @@ fn test_profile() -> Profile {
             target: "~/.gitconfig".into(),
             source: "files/gitconfig".into(),
             mode: Some("0644".into()),
+            origin: None,
+            detected_by: None,
+            classification: None,
         },
         FileEntry {
             target: "~/.config/nvim".into(),
             source: "files/nvim".into(),
             mode: None,
+            origin: None,
+            detected_by: None,
+            classification: None,
         },
     ];
     p.services = vec![ServiceEntry {
         name: "docker.service".into(),
         enabled: Some(true),
         running: None,
+        scope: None,
+        classification: None,
     }];
     p
 }

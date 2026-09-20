@@ -340,6 +340,87 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discove
         distro: r.system.distro.clone(),
         excluded_paths: r.statistics.excluded_paths,
         warnings: r.warnings.clone(),
+        machine: Some(stub::MachineView {
+            hostname: r.system.hostname.clone(),
+            kernel: r.system.kernel.clone(),
+            boot_mode: Some(r.hardware.boot_mode.clone()),
+            root_filesystem: r.hardware.root_filesystem.clone(),
+        }),
+        hardware: Some(stub::HardwareView {
+            cpu_model: r.hardware.cpu.model.clone(),
+            logical_cpus: Some(r.hardware.cpu.logical_count as u32),
+            total_ram_kib: Some(r.hardware.memory.total_kib),
+            gpus: r.hardware.gpus.iter().map(|g| g.description.clone()).collect(),
+            cuda: Some(r.hardware.accelerators.cuda),
+            rocm: Some(r.hardware.accelerators.rocm),
+            compilers: r.hardware.compilers.clone(),
+        }),
+        packages_other: {
+            let mut v = Vec::new();
+            for p in &r.package_inventory.packages {
+                if p.manager != "apt" {
+                    v.push((p.manager.clone(), p.name.clone()));
+                }
+            }
+            v.sort();
+            v.dedup();
+            v
+        },
+        toolchains: r
+            .toolchain
+            .executables
+            .iter()
+            .filter(|e| e.version.is_some())
+            .take(128)
+            .map(|e| stub::ToolchainView {
+                name: e.name.clone(),
+                version: e.version.clone(),
+                provenance: e.provenance.clone(),
+            })
+            .collect(),
+        mounts: r
+            .mounts
+            .iter()
+            .filter(|m| !m.pseudo)
+            .take(256)
+            .map(|m| stub::MountView {
+                mountpoint: m.mountpoint.clone(),
+                fstype: m.fstype.clone(),
+                remote: m.remote,
+                pseudo: m.pseudo,
+            })
+            .collect(),
+        executables: r
+            .toolchain
+            .executables
+            .iter()
+            .filter(|e| e.version.is_some())
+            .take(128)
+            .map(|e| stub::ExecutableView {
+                name: e.name.clone(),
+                version: e.version.clone(),
+                provenance: e.provenance.clone(),
+            })
+            .collect(),
+        project_detail: r
+            .project_contents
+            .iter()
+            .map(|c| {
+                let markers = r
+                    .projects
+                    .iter()
+                    .find(|p| p.name == c.project)
+                    .map(|p| p.markers.clone())
+                    .unwrap_or_default();
+                (
+                    c.project.clone(),
+                    (
+                        markers,
+                        c.roles.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                    ),
+                )
+            })
+            .collect(),
     }
 }
 

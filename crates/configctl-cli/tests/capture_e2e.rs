@@ -181,6 +181,13 @@ fn core_capture_to(
             distro: scan.system.distro.clone(),
             excluded_paths: scan.statistics.excluded_paths,
             warnings: scan.warnings.clone(),
+            machine: None,
+            hardware: None,
+            packages_other: vec![],
+            toolchains: vec![],
+            mounts: vec![],
+            executables: vec![],
+            project_detail: Default::default(),
         }
     };
     let values = scanner.registry().snapshot_values();

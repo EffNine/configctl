@@ -637,5 +637,8 @@ fn _unused_profiles() {
         target: String::new(),
         source: String::new(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     };
 }

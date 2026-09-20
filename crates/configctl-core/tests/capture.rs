@@ -28,6 +28,9 @@ fn profile_serialization_round_trip() {
         target: "~/.gitconfig".into(),
         source: "files/home/gitconfig".into(),
         mode: Some("0644".into()),
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     p.git = Some(GitConfig {
         user_name: Some("Test".into()),
@@ -42,6 +45,8 @@ fn profile_serialization_round_trip() {
         env_schema: Some("env/project-a.toml".into()),
         env_files: vec![".env".into()],
         config_files: vec!["Cargo.toml".into()],
+        markers: vec![],
+        roles: Default::default(),
     });
     let toml = p.to_toml().expect("serialize");
     let back = Profile::from_toml(&toml).expect("deserialize");
@@ -54,8 +59,15 @@ fn profile_serialization_round_trip() {
 #[test]
 fn profile_rejects_bad_schema_version() {
     let mut p = Profile::new("work");
-    p.schema_version = 2;
+    p.schema_version = 99;
     assert!(!p.validate().is_empty());
+}
+
+#[test]
+fn profile_accepts_v1_schema_for_backward_compatibility() {
+    let mut p = Profile::new("work");
+    p.schema_version = configctl_core::profile::SCHEMA_VERSION_V1;
+    assert!(p.validate().is_empty());
 }
 
 #[test]
@@ -66,11 +78,17 @@ fn profile_rejects_duplicate_targets_and_packages() {
         target: "~/.gitconfig".into(),
         source: "files/a".into(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     p.files.push(FileEntry {
         target: "~/.gitconfig".into(),
         source: "files/b".into(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     let errs = p.validate();
     assert!(errs.iter().any(|e| e.contains("duplicate package")));
@@ -84,16 +102,25 @@ fn profile_rejects_traversal_and_absolute_targets() {
         target: "../../etc/passwd".into(),
         source: "files/x".into(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     p.files.push(FileEntry {
         target: "/etc/passwd".into(),
         source: "files/y".into(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     p.files.push(FileEntry {
         target: "~/.ok".into(),
         source: "../escape".into(),
         mode: None,
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     let errs = p.validate();
     assert!(errs.len() >= 3, "all bad paths rejected: {errs:?}");
@@ -106,6 +133,9 @@ fn profile_rejects_bad_modes_and_env_names() {
         target: "~/.x".into(),
         source: "files/x".into(),
         mode: Some("0999".into()),
+        origin: None,
+        detected_by: None,
+        classification: None,
     });
     let mut env = BTreeMap::new();
     env.insert("1BAD".into(), EnvLiteral::Value("x".into()));
@@ -430,6 +460,13 @@ fn capture_ordering_is_deterministic() {
         distro: None,
         excluded_paths: 0,
         warnings: vec![],
+        machine: None,
+        hardware: None,
+        packages_other: vec![],
+        toolchains: vec![],
+        mounts: vec![],
+        executables: vec![],
+        project_detail: Default::default(),
     };
     let mk = || {
         let fake = FakeCommandRunner::new();

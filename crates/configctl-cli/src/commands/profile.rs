@@ -99,7 +99,28 @@ pub fn run_migrate(profile_arg: &str, to: u32) -> Result<String, String> {
             loaded.identity
         ));
     }
-    Err("migration between schema versions is not supported by this build".into())
+    // Explicit one-way v1 → v2 migration; the bundle is rewritten only on
+    // success (validate-after-migrate, fail-closed).
+    let mut profile = loaded.profile.clone();
+    let migrated = configctl_core::profile_migrate::migrate_to_v2(&mut profile)?;
+    if !migrated {
+        return Ok(format!(
+            "profile {:?} is already at schema_version {to}; no migration needed (no changes made)",
+            loaded.identity
+        ));
+    }
+    profile.canonicalize();
+    let errors = profile.validate();
+    if !errors.is_empty() {
+        return Err(format!("migrated profile invalid:\n  - {}", errors.join("\n  - ")));
+    }
+    let text = profile.to_toml()?;
+    let target = dir.join("profile.toml");
+    std::fs::write(&target, text).map_err(|e| format!("write {}: {e:?}", target.display()))?;
+    Ok(format!(
+        "profile {:?} migrated to schema_version {to} (v1 content preserved, v2 sections defaulted)",
+        loaded.identity
+    ))
 }
 
 /// Render `list` human output.
