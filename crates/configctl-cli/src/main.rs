@@ -2,15 +2,18 @@
 //! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::{capture, scan};
+use configctl_cli::commands::{capture, plan, scan};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "configctl")]
-#[command(about = "Linux-first environment manager (scan + capture; no mutation)")]
+#[command(about = "Linux-first environment manager (scan + capture + plan; apply in P4)")]
 #[command(version = "0.1.0")]
 struct Cli {
+    /// Override the state directory (default ~/.local/state/configctl)
+    #[arg(long = "state-dir", global = true, value_name = "DIR")]
+    state_dir: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -67,6 +70,21 @@ enum Cmd {
         /// Suppress non-essential output
         #[arg(short, long)]
         quiet: bool,
+        /// Increase diagnostic detail
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Show the deterministic diff between a profile and this machine (no mutation)
+    Plan {
+        /// Profile name or path to a profile bundle directory
+        #[arg(value_name = "PROFILE")]
+        profile: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Exit 5 when the plan contains conflicts
+        #[arg(long = "fail-on-conflict")]
+        fail_on_conflict: bool,
         /// Increase diagnostic detail
         #[arg(short, long)]
         verbose: bool,
@@ -192,6 +210,43 @@ fn main() -> ExitCode {
                     }
                     ExitCode::SUCCESS
                 }
+            }
+        }
+        Some(Cmd::Plan {
+            profile,
+            json,
+            fail_on_conflict,
+            verbose: _,
+        }) => {
+            let out = plan::run_plan(profile, cli.state_dir.as_deref(), None, &runner, None, None);
+            match (&out.plan, &out.error) {
+                (_, Some(err)) if out.plan.is_none() => {
+                    if *json {
+                        let env =
+                            configctl_cli::render::Envelope::error("plan", &err.message, &err.hint);
+                        println!("{}", env.to_json());
+                    } else {
+                        eprintln!("error: {}", err.message);
+                    }
+                    ExitCode::from(2)
+                }
+                (Some(p), _) => {
+                    if *json {
+                        let envelope = configctl_cli::render::Envelope::plan_ok(p);
+                        let s = envelope.to_json();
+                        println!("{s}");
+                        let _: serde_json::Value =
+                            serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
+                    } else {
+                        print!("{}", plan::render_human(p));
+                    }
+                    if *fail_on_conflict && !p.conflicts.is_empty() {
+                        ExitCode::from(5)
+                    } else {
+                        ExitCode::SUCCESS
+                    }
+                }
+                (None, _) => ExitCode::from(1),
             }
         }
     };

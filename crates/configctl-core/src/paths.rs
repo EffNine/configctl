@@ -251,6 +251,23 @@ pub fn validate_package_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a systemd user unit name (`[A-Za-z0-9:_.@-]+\.service`, v1 only
+/// `.service` user units).
+pub fn validate_service_unit(unit: &str) -> bool {
+    if unit.is_empty() || unit.len() > 128 || unit.contains('\0') || unit.contains("..") {
+        return false;
+    }
+    if !unit.ends_with(".service") {
+        return false;
+    }
+    let stem = &unit[..unit.len() - ".service".len()];
+    if stem.is_empty() {
+        return false;
+    }
+    stem.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '.' | '@' | '-'))
+}
+
 /// Validate a `secret://` reference (`secret://<namespace>/<path...>`).
 pub fn validate_secret_ref(r: &str) -> Result<(), String> {
     let rest = r

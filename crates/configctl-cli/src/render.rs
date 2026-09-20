@@ -79,6 +79,37 @@ impl Envelope {
         }
     }
 
+    /// A success envelope wrapping a plan.
+    pub fn plan_ok(plan: &configctl_core::plan::Plan) -> Self {
+        Self {
+            schema_version: 1,
+            command: "plan".into(),
+            status: "ok".into(),
+            data: Some(crate::commands::plan::plan_json(plan)),
+            warnings: plan
+                .warnings
+                .iter()
+                .map(|w| Warning {
+                    code: w.code.clone(),
+                    message: w.message.clone(),
+                })
+                .collect(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// A generic success envelope.
+    pub fn ok(command: &str, data: serde_json::Value) -> Self {
+        Self {
+            schema_version: 1,
+            command: command.into(),
+            status: "ok".into(),
+            data: Some(data),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
     /// An error envelope (usage/configuration errors, exit 2).
     pub fn error(command: &str, message: &str, hint: &str) -> Self {
         Self {
