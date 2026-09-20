@@ -10,6 +10,7 @@ Commands:
 
     configctl rollback --list                 # what can be rolled back
     configctl rollback --plan <plan-id>       # roll back that plan
+    configctl rollback --last                 # newest plan; no need to copy an ID
     configctl rollback --plan <plan-id> --dry-run
     configctl rollback --plan <plan-id> --yes
 

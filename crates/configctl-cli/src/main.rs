@@ -149,6 +149,9 @@ enum Cmd {
         /// Explicit plan ID flag (alias for the positional)
         #[arg(long = "plan", value_name = "PLAN_ID")]
         plan_flag: Option<String>,
+        /// Apply the most recent plan (instead of naming a plan ID)
+        #[arg(long, conflicts_with_all = ["plan", "plan_flag"])]
+        last: bool,
         /// Approve the current plan non-interactively
         #[arg(short, long)]
         yes: bool,
@@ -204,6 +207,9 @@ enum Cmd {
         /// Explicit plan ID
         #[arg(long = "plan", value_name = "PLAN_ID")]
         plan_flag: Option<String>,
+        /// Roll back the most recent plan (instead of naming one)
+        #[arg(long, conflicts_with_all = ["target", "plan_flag", "list"])]
+        last: bool,
         /// Show rollback candidates without changing anything
         #[arg(long)]
         list: bool,
@@ -674,18 +680,47 @@ fn run(cli: Cli) -> ExitCode {
             dry_run,
             adopt,
             json,
+            last,
         }) => {
-            let out = apply::run_apply(
-                plan_arg.as_deref(),
-                plan_flag.as_deref(),
-                cli.state_dir.as_deref(),
-                None,
-                *yes,
-                *dry_run,
-                adopt,
-                *json,
-                &runner,
-            );
+            let out = if *last {
+                let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
+                match apply::resolve_last_plan(&state_dir) {
+                    Ok(id) => {
+                        if !*json {
+                            eprintln!("using latest plan {id}");
+                        }
+                        apply::run_apply(
+                            Some(&id),
+                            None,
+                            cli.state_dir.as_deref(),
+                            None,
+                            *yes,
+                            *dry_run,
+                            adopt,
+                            *json,
+                            &runner,
+                        )
+                    }
+                    Err(e) => apply::ApplyOutput {
+                        report: None,
+                        plan_id: String::new(),
+                        exit_code: apply::exit_code_for(&e),
+                        error: Some(e),
+                    },
+                }
+            } else {
+                apply::run_apply(
+                    plan_arg.as_deref(),
+                    plan_flag.as_deref(),
+                    cli.state_dir.as_deref(),
+                    None,
+                    *yes,
+                    *dry_run,
+                    adopt,
+                    *json,
+                    &runner,
+                )
+            };
             match (&out.report, &out.error) {
                 (Some(rep), _) => {
                     if *json {
@@ -1084,18 +1119,47 @@ fn run(cli: Cli) -> ExitCode {
             yes,
             dry_run,
             json,
+            last,
         }) => {
-            let out = rollback::run_rollback(
-                target.as_deref(),
-                plan_flag.as_deref(),
-                *list,
-                cli.state_dir.as_deref(),
-                None,
-                *yes,
-                *dry_run,
-                *json,
-                &runner,
-            );
+            let out = if *last {
+                let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
+                match rollback::resolve_last_plan(&state_dir) {
+                    Ok(id) => {
+                        if !*json {
+                            eprintln!("using latest plan {id}");
+                        }
+                        rollback::run_rollback(
+                            Some(&id),
+                            None,
+                            false,
+                            cli.state_dir.as_deref(),
+                            None,
+                            *yes,
+                            *dry_run,
+                            *json,
+                            &runner,
+                        )
+                    }
+                    Err(e) => rollback::RollbackOutput {
+                        report: None,
+                        plans: None,
+                        exit_code: rollback::exit_code_for(&e),
+                        error: Some(e),
+                    },
+                }
+            } else {
+                rollback::run_rollback(
+                    target.as_deref(),
+                    plan_flag.as_deref(),
+                    *list,
+                    cli.state_dir.as_deref(),
+                    None,
+                    *yes,
+                    *dry_run,
+                    *json,
+                    &runner,
+                )
+            };
             if let Some(plans) = &out.plans {
                 if *json {
                     let data = serde_json::json!({"plans": plans.iter().map(|(id, p, s, c)| serde_json::json!({"id": id, "profile": p, "status": s, "created_at": c})).collect::<Vec<_>>()});

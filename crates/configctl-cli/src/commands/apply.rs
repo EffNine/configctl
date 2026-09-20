@@ -44,6 +44,31 @@ pub fn prompt_approve(plan: &configctl_core::plan::Plan) -> bool {
     }
 }
 
+/// Stable exit code for an apply error (see CLI_SPEC §1.1).
+pub fn exit_code_for(e: &ApplyError) -> i32 {
+    match e {
+        ApplyError::Usage(_) => 2,
+        ApplyError::Declined(_) => 4,
+        ApplyError::Conflict(_) => 5,
+        ApplyError::ProviderUnavailable(_) => 7,
+        ApplyError::Privilege(_) => 8,
+        ApplyError::OpFailed { .. } => 1,
+        ApplyError::CrashSimulated { .. } => 1,
+        ApplyError::Internal(_) => 1,
+    }
+}
+
+/// Resolve `--last`: the most recent persisted plan (any profile).
+pub fn resolve_last_plan(state_dir: &Path) -> Result<String, ApplyError> {
+    match configctl_core::state::newest_plan_id(state_dir) {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(ApplyError::Usage(
+            "no plans yet; run `configctl plan <profile>` first".into(),
+        )),
+        Err(e) => Err(ApplyError::Internal(e.to_string())),
+    }
+}
+
 /// Run apply.
 #[allow(clippy::too_many_arguments)]
 pub fn run_apply(
@@ -141,16 +166,7 @@ pub fn run_apply(
             exit_code: 0,
         },
         Err(e) => {
-            let code = match &e {
-                ApplyError::Usage(_) => 2,
-                ApplyError::Declined(_) => 4,
-                ApplyError::Conflict(_) => 5,
-                ApplyError::ProviderUnavailable(_) => 7,
-                ApplyError::Privilege(_) => 8,
-                ApplyError::OpFailed { .. } => 1,
-                ApplyError::CrashSimulated { .. } => 1,
-                ApplyError::Internal(_) => 1,
-            };
+            let code = exit_code_for(&e);
             ApplyOutput {
                 report: None,
                 plan_id,

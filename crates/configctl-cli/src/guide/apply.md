@@ -8,6 +8,7 @@ Touches: the machine. Requires explicit approval.
 Commands:
 
     configctl apply <plan-id>              # interactive: asks y/N
+    configctl apply --last                 # newest plan; no need to copy an ID
     configctl apply <plan-id> --yes        # non-interactive approval
     configctl apply <plan-id> --dry-run    # preview, never writes
     configctl apply <plan-id> --adopt <target>   # take ownership of a conflict

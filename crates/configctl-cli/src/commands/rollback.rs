@@ -25,12 +25,24 @@ pub fn error_message(e: &RollbackError) -> String {
     }
 }
 
-fn exit_code(e: &RollbackError) -> i32 {
+/// Stable exit code for a rollback error (see CLI_SPEC §1.1).
+pub fn exit_code_for(e: &RollbackError) -> i32 {
     match e {
         RollbackError::Usage(_) => 2,
         RollbackError::Declined(_) => 4,
         RollbackError::Conflict(_) => 5,
         RollbackError::Internal(_) => 1,
+    }
+}
+
+/// Resolve `--last`: the most recent persisted plan (any profile).
+pub fn resolve_last_plan(state_dir: &Path) -> Result<String, RollbackError> {
+    match configctl_core::state::newest_plan_id(state_dir) {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(RollbackError::Usage(
+            "no plans yet; run `configctl plan <profile>` first".into(),
+        )),
+        Err(e) => Err(RollbackError::Internal(e.to_string())),
     }
 }
 
@@ -161,7 +173,7 @@ pub fn run_rollback(
                 }
             }
             Err(e) => {
-                let c = exit_code(&e);
+                let c = exit_code_for(&e);
                 RollbackOutput {
                     report: None,
                     plans: None,
@@ -202,7 +214,7 @@ pub fn run_rollback(
             exit_code: 0,
         },
         Err(e) => {
-            let c = exit_code(&e);
+            let c = exit_code_for(&e);
             RollbackOutput {
                 report: None,
                 plans: None,

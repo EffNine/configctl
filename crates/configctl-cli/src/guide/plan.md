@@ -28,4 +28,4 @@ Common confusion:
   - A plan with no conflicts and no operations means you are already converged.
 
 Next:
-    configctl apply <plan-id>
+    configctl apply --last

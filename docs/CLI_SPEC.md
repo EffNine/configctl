@@ -260,12 +260,16 @@ No changes made. Run `configctl apply 01J8Z6…` to execute this plan.
 ### 2.6 `configctl apply`
 
 ```
-configctl apply [PLAN_ID] [--plan <PLAN_ID>] [--yes] [--dry-run]
+configctl apply [PLAN_ID] [--plan <PLAN_ID>] [--last] [--yes] [--dry-run]
                 [--adopt <TARGET>]... [--json]
 ```
 
 - Takes a plan ID only — never a profile path (refused, exit 2). Refuses stale plans
   (profile or state changed since planning) with exit 5 and a re-plan hint.
+- `--last` applies the most recent persisted plan (any profile) instead of
+  naming an ID; it cannot be combined with a positional ID or `--plan` (clap
+  usage error, exit 2). The chosen plan is announced on stderr in human mode.
+  With no plans yet it exits 2 with "run `configctl plan <profile>` first".
 - Executes **exactly** the planned operations, in plan order.
 - Prompts for approval unless `--yes`; declines exit 4.
 - `--dry-run` prints the same execution preview without writing; never prompts.
@@ -335,11 +339,15 @@ JSON: one record per resource with `status` in
 ### 2.8 `configctl rollback`
 
 ```
-configctl rollback [NAME|TARGET] [--plan <PLAN_ID>] [--list]
+configctl rollback [NAME|TARGET] [--plan <PLAN_ID>] [--last] [--list]
                    [--yes] [--dry-run] [--json]
 ```
 
-- `--list` shows rollback candidates from history (plan id, time, files).
+- `--list` shows rollback candidates from history (plan id, time, files);
+  incompatible with `--last`.
+- `--last` rolls back the most recent persisted plan (any profile); cannot be
+  combined with a positional target or `--plan`. The chosen plan is announced
+  on stderr in human mode.
 - Default: roll back the most recent applied plan for the profile.
 - Targeted: `configctl rollback ~/.gitconfig` restores that file from the most
   recent backup before its last change.

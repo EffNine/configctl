@@ -14,7 +14,7 @@
 //! (enforced by the plan model having no value fields).
 
 use crate::plan::Plan;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -244,6 +244,24 @@ impl std::fmt::Display for PlanLoadError {
 }
 
 impl std::error::Error for PlanLoadError {}
+
+/// Most recent persisted plan id (any profile), if any.
+///
+/// Backs `apply --last` / `rollback --last`. A missing state directory means
+/// no plans exist yet (not an error).
+pub fn newest_plan_id(dir: &Path) -> Result<Option<String>, PlanLoadError> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let conn = open_db(dir).map_err(PlanLoadError::Unavailable)?;
+    conn.query_row(
+        "SELECT id FROM plans ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| PlanLoadError::Unavailable(format!("query latest plan: {e:?}")))
+}
 
 pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String, PathBuf), PlanLoadError> {
     if plan_id.contains('/') || plan_id.contains('\0') || plan_id.contains("..") {
@@ -552,5 +570,30 @@ mod tests {
             Err(PlanLoadError::Unavailable(_)) => {}
             other => panic!("expected Unavailable, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn newest_plan_id_is_the_newest_and_missing_store_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("state");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(newest_plan_id(&dir).unwrap(), None);
+
+        {
+            let conn = open_db(&dir).unwrap();
+            for (id, created) in [("p-old", 100i64), ("p-new", 200i64)] {
+                conn.execute(
+                    "INSERT INTO plans (id, profile, profile_hash, state_hash, plan_hash, \
+                     status, approved_at, created_at, doc_path, bundle_dir) \
+                     VALUES (?1, 'p', 'ph', 'sh', 'planh', 'planned', NULL, ?2, '', '')",
+                    params![id, created],
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(newest_plan_id(&dir).unwrap().as_deref(), Some("p-new"));
+
+        let missing = tmp.path().join("nope");
+        assert_eq!(newest_plan_id(&missing).unwrap(), None);
     }
 }

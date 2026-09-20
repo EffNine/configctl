@@ -226,7 +226,7 @@ pub fn hint(topic: Topic) -> Option<&'static str> {
         Topic::Scan => Some("capture what you see with `configctl capture`"),
         Topic::Capture => Some("validate the bundle with `configctl profile validate <bundle>`"),
         Topic::Profile => Some("see changes with `configctl plan <bundle>`"),
-        Topic::Plan => Some("apply this plan with `configctl apply <plan-id>`"),
+        Topic::Plan => Some("apply this plan with `configctl apply --last`"),
         Topic::Apply => Some("check the result with `configctl verify <profile>`"),
         Topic::Verify => Some("drift? `configctl plan <profile>` shows how to fix it"),
         Topic::Doctor => Some("exit codes are explained in `configctl guide exit-codes`"),
