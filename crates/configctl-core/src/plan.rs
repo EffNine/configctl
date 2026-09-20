@@ -10,6 +10,7 @@
 use crate::observe::ObservedState;
 use crate::profile::EnvLiteral;
 use crate::profile_load::LoadedProfile;
+use crate::classify::PlanActionClass;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,9 +70,38 @@ pub struct Operation {
     pub desired_after: Option<String>,
     /// Whether rollback is supported for this op.
     pub rollback: RollbackSupport,
+    /// v1.1 execution policy class (see [`PlanActionClass`]).
+    ///
+    /// Old plans without this field deserialize as `SAFE_REPRODUCE`,
+    /// preserving v1 execution semantics exactly.
+    #[serde(default = "default_action_class")]
+    pub action_class: PlanActionClass,
     /// Redaction-safe details.
     #[serde(default)]
     pub details: BTreeMap<String, String>,
+}
+
+/// Default class for plans persisted before v1.1 (v1 semantics: every
+/// executable op was deemed safe).
+fn default_action_class() -> PlanActionClass {
+    PlanActionClass::SafeReproduce
+}
+
+/// Execution class for a freshly built operation kind.
+fn class_for_kind(kind: &OperationKind) -> PlanActionClass {
+    match kind {
+        OperationKind::PackageInstall
+        | OperationKind::FileCreate
+        | OperationKind::FileUpdate
+        | OperationKind::EnvironmentSchemaChange
+        | OperationKind::ServiceEnable
+        | OperationKind::ServiceDisable
+        | OperationKind::GitConfigChange => PlanActionClass::SafeReproduce,
+        OperationKind::FileConflict
+        | OperationKind::NoOp
+        | OperationKind::PackageVersionMismatch => PlanActionClass::Manual,
+        OperationKind::Unsupported => PlanActionClass::Unsupported,
+    }
 }
 
 /// Rollback honesty per operation.
@@ -531,6 +561,44 @@ pub fn build_plan(
         }
     }
 
+    // v1.1 execution policy refinement (deterministic function of profile
+    // content — runs before sorting/hashing so classes are stable).
+    //
+    // - System-scope services (v2 profiles) are PRIVILEGED: recorded in the
+    //   plan, never executed without privilege. User-scope stays
+    //   SAFE_REPRODUCE (v1 behavior preserved).
+    // - Secret-backed env operations are SECRET_REQUIRED: the value must
+    //   come from the backend at apply time, never from the profile.
+    {
+        let scopes: BTreeMap<&str, &str> = profile
+            .services
+            .iter()
+            .map(|s| {
+                (
+                    s.name.as_str(),
+                    s.scope.as_deref().unwrap_or("user"),
+                )
+            })
+            .collect();
+        for op in operations.iter_mut() {
+            if op.provider == "systemd"
+                && matches!(
+                    op.kind,
+                    OperationKind::ServiceEnable | OperationKind::ServiceDisable
+                )
+                && scopes.get(op.target.as_str()).copied().unwrap_or("user") == "system"
+            {
+                op.action_class = PlanActionClass::Privileged;
+            }
+            if op.provider == "env"
+                && op.kind == OperationKind::Unsupported
+                && op.summary.contains("secret-backed")
+            {
+                op.action_class = PlanActionClass::SecretRequired;
+            }
+        }
+    }
+
     // Deterministic sort: (provider_rank, target, kind).
     operations.sort_by(|a, b| {
         (provider_rank(&a.provider), &a.target, kind_rank(&a.kind)).cmp(&(
@@ -594,6 +662,7 @@ pub fn compute_plan_hash(plan: &Plan) -> String {
             "expected_before": o.expected_before,
             "desired_after": o.desired_after,
             "rollback": format!("{:?}", o.rollback),
+            "class": o.action_class.as_str(),
             "details": o.details,
         })).collect::<Vec<_>>(),
         "warnings": plan.warnings,
@@ -641,13 +710,14 @@ fn mk_op(
     Operation {
         id: String::new(),
         provider: provider.into(),
-        kind,
+        kind: kind.clone(),
         target: target.into(),
         summary,
         risk: risk.into(),
         expected_before,
         desired_after,
         rollback,
+        action_class: class_for_kind(&kind),
         details: BTreeMap::new(),
     }
 }

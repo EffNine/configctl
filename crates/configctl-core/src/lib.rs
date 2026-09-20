@@ -8,6 +8,7 @@
 pub mod apply;
 pub mod backup;
 pub mod capture;
+pub mod capture_policy;
 pub mod classify;
 pub mod command;
 pub mod env_schema;

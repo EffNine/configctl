@@ -205,7 +205,12 @@ pub fn render_human(plan: &Plan) -> String {
         s.push_str(title);
         s.push('\n');
         for o in ops {
-            s.push_str(&format!("  {} {}\n", kind_glyph(&o.kind), o.summary));
+            s.push_str(&format!(
+                "  {} {} [{}]\n",
+                kind_glyph(&o.kind),
+                o.summary,
+                o.action_class.as_str()
+            ));
         }
         s.push('\n');
     }

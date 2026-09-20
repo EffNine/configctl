@@ -395,7 +395,20 @@ pub fn classify_file(path: &Path, kind: FileKind, executable: bool) -> Classific
         );
     }
 
-    // 7. Executables: toolchain content, provenance tracked elsewhere.
+    // 7. Portable configuration: known config basenames, project manifests,
+    //    config extensions, and shell/editor/vcs/toolchain dotfiles are
+    //    understood as portable text — not unknown.
+    if is_portable_config(&name, path) {
+        return Classification::new(
+            ResourceClass::Portable,
+            Reproducibility::Reproduce,
+            CaptureAction::Capture,
+            vec!["portable_config".to_string()],
+            "recognized portable configuration; safe to reproduce",
+        );
+    }
+
+    // 8. Executables: toolchain content, provenance tracked elsewhere.
     if executable && kind == FileKind::Regular {
         return Classification::new(
             ResourceClass::Dependency,
@@ -406,7 +419,7 @@ pub fn classify_file(path: &Path, kind: FileKind, executable: bool) -> Classific
         );
     }
 
-    // 8. Default: UNKNOWN with evidence — never silently dropped.
+    // 9. Default: UNKNOWN with evidence — never silently dropped.
     let mut signals = vec!["unclassified".to_string()];
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         signals.push(format!("extension:.{ext}"));
@@ -420,9 +433,95 @@ pub fn classify_file(path: &Path, kind: FileKind, executable: bool) -> Classific
     )
 }
 
+/// Well-known portable config basenames (shell, editor, terminal, VCS,
+/// toolchain, container ignores).
+pub const PORTABLE_CONFIG_NAMES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zlogin",
+    ".zlogout",
+    ".zshenv",
+    ".tmux.conf",
+    ".inputrc",
+    ".wgetrc",
+    ".curlrc",
+    ".vimrc",
+    ".gvimrc",
+    ".ideavimrc",
+    ".editorconfig",
+    ".gitconfig",
+    ".gitignore",
+    ".gitattributes",
+    ".tool-versions",
+    ".nvmrc",
+    ".node-version",
+    ".python-version",
+    ".rust-toolchain",
+    ".rust-toolchain.toml",
+    ".envrc",
+    ".dockerignore",
+];
+
+/// Project manifest basenames (portable build definitions).
+pub const MANIFEST_NAMES: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Gemfile",
+    "composer.json",
+    "mix.exs",
+    "CMakeLists.txt",
+    "meson.build",
+    "BUILD",
+    "BUILD.bazel",
+    "WORKSPACE",
+    "Makefile",
+    "makefile",
+    "justfile",
+    "Justfile",
+    "Taskfile.yml",
+    "Taskfile.yaml",
+    "Earthfile",
+    "Dockerfile",
+    "Containerfile",
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yml",
+    "flake.nix",
+];
+
+/// Config file extensions (portable text when not generated/cache/secret).
+pub const CONFIG_EXTENSIONS: &[&str] = &[
+    "toml", "yaml", "yml", "json", "ini", "conf", "cfg", "nix", "hcl", "tf",
+];
+
+/// True when the file is recognized portable configuration.
+fn is_portable_config(name: &str, path: &Path) -> bool {
+    if PORTABLE_CONFIG_NAMES.iter().any(|b| *b == name) {
+        return true;
+    }
+    if MANIFEST_NAMES.iter().any(|b| *b == name) {
+        return true;
+    }
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if CONFIG_EXTENSIONS.contains(&ext) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Lockfile basenames (regenerable from their manifest).
-fn is_lockfile(name: &str) -> bool {
-    matches!(
+fn is_lockfile(name: &str) -> bool {    matches!(
         name,
         "Cargo.lock"
             | "package-lock.json"

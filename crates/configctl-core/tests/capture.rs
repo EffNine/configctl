@@ -467,6 +467,9 @@ fn capture_ordering_is_deterministic() {
         mounts: vec![],
         executables: vec![],
         project_detail: Default::default(),
+        services: vec![],
+        global_env: vec![],
+        package_versions: vec![],
     };
     let mk = || {
         let fake = FakeCommandRunner::new();

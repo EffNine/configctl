@@ -76,6 +76,28 @@ fn lockfiles_are_reproducible_and_captured() {
 }
 
 #[test]
+fn recognized_configs_are_portable() {
+    for name in [
+        "/home/u/.bashrc",
+        "/home/u/.zshrc",
+        "/home/u/.tmux.conf",
+        "/home/u/.gitconfig",
+        "/home/u/.editorconfig",
+        "/home/u/proj/Cargo.toml",
+        "/home/u/proj/package.json",
+        "/home/u/.config/app/settings.yaml",
+        "/home/u/data.json",
+    ] {
+        let c = classify(name);
+        assert_eq!(c.class, ResourceClass::Portable, "{name}");
+        assert_eq!(c.action, CaptureAction::Capture, "{name}");
+    }
+    // Secrets still win over config-looking names.
+    let c = classify("/home/u/.env");
+    assert_eq!(c.action, CaptureAction::Reference);
+}
+
+#[test]
 fn unknown_files_are_preserved_not_dropped() {
     let c = classify("/home/u/.config/someapp/weird-blob.dat");
     assert_eq!(c.class, ResourceClass::Unknown);

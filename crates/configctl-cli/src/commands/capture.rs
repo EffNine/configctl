@@ -421,6 +421,48 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discove
                 )
             })
             .collect(),
+        services: {
+            let mut v: Vec<stub::ServiceView> = r
+                .services
+                .services
+                .iter()
+                .filter(|s| s.name.ends_with(".service"))
+                .take(150)
+                .map(|s| stub::ServiceView {
+                    name: s.name.clone(),
+                    scope: match s.scope {
+                        configctl_discovery::services::UnitScope::User => "user".into(),
+                        configctl_discovery::services::UnitScope::System => "system".into(),
+                    },
+                    enabled: s.enabled,
+                    active: s.active.clone(),
+                })
+                .collect();
+            v.sort_by(|a, b| (&a.scope, &a.name).cmp(&(&b.scope, &b.name)));
+            v
+        },
+        global_env: r
+            .environment
+            .vars
+            .iter()
+            .take(512)
+            .map(|v| stub::GlobalEnvView {
+                name: v.name.clone(),
+                classification: v.classification.as_str().into(),
+                value: v.value.clone(),
+            })
+            .collect(),
+        package_versions: r
+            .package_inventory
+            .packages
+            .iter()
+            .take(20000)
+            .map(|p| stub::PackageVersionView {
+                manager: p.manager.clone(),
+                name: p.name.clone(),
+                version: p.version.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -434,8 +476,20 @@ pub fn render_human(out: &CaptureOutput, verbose: bool) -> String {
         s.push_str(&format!("Projects:       {}\n", sum.projects));
         s.push_str(&format!("Files:          {}\n", sum.files));
         s.push_str(&format!("Packages:       {}\n", sum.packages));
+        s.push_str(&format!("Toolchains:     {}\n", sum.toolchains));
+        s.push_str(&format!("Services:       {}\n", sum.services));
+        s.push_str(&format!("Env literals:   {}\n", sum.env_literals));
+        s.push_str(&format!("Directories:    {}\n", sum.directories));
         s.push_str(&format!("Env schemas:    {}\n", sum.env_schemas));
         s.push_str(&format!("Secrets:        {}\n", sum.secrets));
+        if !sum.capture_actions.is_empty() {
+            let mut actions: Vec<(&String, &u64)> = sum.capture_actions.iter().collect();
+            actions.sort_by(|a, b| a.0.cmp(b.0));
+            s.push_str("Capture actions:\n");
+            for (action, count) in actions {
+                s.push_str(&format!("  {action}: {count}\n"));
+            }
+        }
         s.push('\n');
         if !sum.excluded.is_empty() {
             s.push_str("Excluded:\n");

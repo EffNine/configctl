@@ -233,6 +233,7 @@ fn package_missing_and_mismatch() {
     loaded.lock = Some(PackagesLock {
         schema_version: SCHEMA_VERSION,
         apt: BTreeMap::from([("ripgrep".into(), "14.1.0".into())]),
+        other: Default::default(),
     });
     let mut st = ObservedState::default();
     st.packages.insert("ripgrep".into(), "14.0".into());

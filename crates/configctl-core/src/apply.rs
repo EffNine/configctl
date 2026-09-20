@@ -247,6 +247,7 @@ pub fn apply_plan(
         if op.kind == OperationKind::FileConflict && adopt.contains(&op.target) {
             let mut adopted = op.clone();
             adopted.kind = OperationKind::FileUpdate;
+            adopted.action_class = crate::classify::PlanActionClass::SafeReproduce;
             adopted.summary = format!("file {}: adopt + update (ownership taken)", op.target);
             ops.push(adopted);
         } else {
@@ -323,6 +324,19 @@ pub fn apply_plan(
 }
 
 /// Execute one operation with full journaling. Returns `Ok(None)` for
+/// Refusal reason for an execution policy class, if the class must never
+/// execute in this apply path. `None` means the kind dispatch decides.
+pub fn refusal_for_class(class: crate::classify::PlanActionClass) -> Option<&'static str> {
+    match class {
+        crate::classify::PlanActionClass::Privileged => {
+            Some("refused PRIVILEGED: requires privilege (system scope)")
+        }
+        crate::classify::PlanActionClass::Destructive => Some("refused DESTRUCTIVE"),
+        crate::classify::PlanActionClass::Unsupported => Some("refused UNSUPPORTED"),
+        _ => None,
+    }
+}
+
 /// non-executable ops (NoOp/Unsupported/mismatch markers are skipped —
 /// Unsupported package/service states were already surfaced at plan time).
 #[allow(clippy::too_many_arguments)]
@@ -351,6 +365,18 @@ fn execute_op(
         }
         Ok(())
     };
+
+    // v1.1 execution policy gate (before kind dispatch): hardcore
+    // discovery never means blind execution. Privileged, destructive, and
+    // unsupported-class operations are refused here even when their kind
+    // would otherwise dispatch (defense in depth against hostile or
+    // hand-edited plans). Old plans without the field default to
+    // SAFE_REPRODUCE, preserving v1 behavior exactly.
+    if let Some(reason) = refusal_for_class(op.action_class) {
+        journal(PH_INTENT, None, Some(reason))
+            .map_err(ApplyError::Internal)?;
+        return Ok(None);
+    }
 
     match op.kind {
         OperationKind::NoOp

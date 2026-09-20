@@ -387,6 +387,9 @@ pub struct PackagesLock {
     pub schema_version: u32,
     #[serde(default)]
     pub apt: std::collections::BTreeMap<String, String>,
+    /// v2: per-manager name → version (`cargo → {ripgrep → 14.1.0}`).
+    #[serde(default)]
+    pub other: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
 impl Profile {

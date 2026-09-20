@@ -29,16 +29,35 @@ use std::path::{Path, PathBuf};
 
 /// Home dotfiles eligible for payload capture (must also pass all safety
 /// checks; secret-bearing files are excluded, never copied).
+///
+/// v1.1 broadens the candidate set aggressively (shell, editor, terminal,
+/// toolchain configs) while keeping every safety gate: size caps, secret
+/// screening, symlink rejection, and the classification policy in
+/// [`crate::capture_policy`]. Candidates that fail any gate are listed in
+/// the capture summary with an explicit reason — never silently dropped.
 pub const HOME_ALLOWLIST: &[&str] = &[
+    ".bash_profile",
+    ".bashrc",
+    ".curlrc",
     ".editorconfig",
     ".gitconfig",
     ".gitignore",
+    ".gvimrc",
+    ".ideavimrc",
+    ".inputrc",
     ".node-version",
     ".nvmrc",
+    ".profile",
     ".python-version",
     ".rust-toolchain",
     ".rust-toolchain.toml",
+    ".tmux.conf",
     ".tool-versions",
+    ".vimrc",
+    ".wgetrc",
+    ".zprofile",
+    ".zshenv",
+    ".zshrc",
 ];
 
 /// Options for one capture run.
@@ -76,6 +95,13 @@ pub struct CaptureSummary {
     pub unsupported: Vec<String>,
     pub unknown: Vec<String>,
     pub warnings: Vec<String>,
+    /// v1.1: explicit capture decisions (`capture → n`, …).
+    pub capture_actions: BTreeMap<String, u64>,
+    /// v1.1: counts for the new sections.
+    pub toolchains: usize,
+    pub services: usize,
+    pub env_literals: usize,
+    pub directories: usize,
 }
 
 /// The full capture result (in-memory; writing is a separate step).
@@ -126,7 +152,7 @@ pub fn run_capture(
     let mut payloads: Vec<FilePayload> = Vec::new();
     let mut excluded: Vec<String> = Vec::new();
     let mut unsupported: Vec<String> = Vec::new();
-    let unknown: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
     let mut file_secret_excluded = 0usize;
 
     if let Some(home) = &opts.home {
@@ -137,6 +163,24 @@ pub fn run_capture(
             }
             match files::decide_file(&abs, &approved, opts.limits.max_file_bytes as u64) {
                 files::FileDecision::Capture => {
+                    // v1.1 classification gate (defense in depth): capture is
+                    // aggressive by default, but secret/credential material
+                    // and generated/cache content are vetoed even for
+                    // allowlisted names. Everything else is captured with
+                    // its classification recorded as provenance.
+                    let class =
+                        crate::classify::classify_file(&abs, crate::classify::FileKind::Regular, false);
+                    match class.class {
+                        crate::classify::ResourceClass::Secret
+                        | crate::classify::ResourceClass::Credential
+                        | crate::classify::ResourceClass::Generated
+                        | crate::classify::ResourceClass::Cache => {
+                            let policy = crate::capture_policy::decide_home_file(class.class);
+                            excluded.push(format!("{}: {}", abs.display(), policy.reason));
+                            continue;
+                        }
+                        _ => {}
+                    }
                     // Bundle-relative payload path: `files/home/<stem>`.
                     let stem = name.trim_start_matches('.');
                     let rel = format!("files/home/{stem}");
@@ -239,7 +283,85 @@ pub fn run_capture(
         env_schemas.insert(format!("env/{project}.toml"), schema);
     }
 
-    let manifest = env_schema::build_secret_manifest(&opts.profile_name, &per_project_obs);
+    let mut manifest = env_schema::build_secret_manifest(&opts.profile_name, &per_project_obs);
+    // v1.1 global environment: secret refs enter the manifest (project None,
+    // source `environment`); safe literals enter the profile below.
+    let mut environment_literals: BTreeMap<String, crate::profile::EnvLiteral> = BTreeMap::new();
+    {
+        let mut seen_env: BTreeMap<String, bool> = BTreeMap::new();
+        for g in scan.global_env.iter().take(512) {
+            if g.name.is_empty() || seen_env.contains_key(&g.name) {
+                continue;
+            }
+            seen_env.insert(g.name.clone(), true);
+            if crate::paths::validate_env_name(&g.name).is_err() {
+                excluded.push(format!("environment.{}: invalid variable name", g.name));
+                continue;
+            }
+            let policy = crate::capture_policy::decide_global_env(match g.classification.as_str() {
+                "secret" => crate::classify::EnvClass::Secret,
+                "public_config" => crate::classify::EnvClass::PublicConfig,
+                "path" => crate::classify::EnvClass::Path,
+                "machine_specific" => crate::classify::EnvClass::MachineSpecific,
+                "runtime" => crate::classify::EnvClass::Runtime,
+                _ => crate::classify::EnvClass::Unknown,
+            });
+            match policy.action {
+                crate::classify::CaptureAction::Reference => {
+                    let secret_ref =
+                        format!("secret://{}/{}/{}", opts.profile_name, "global", g.name);
+                    if crate::paths::validate_secret_ref(&secret_ref).is_err() {
+                        excluded.push(format!("environment.{}: unrepresentable secret ref", g.name));
+                        continue;
+                    }
+                    manifest.secrets.push(crate::profile::SecretEntry {
+                        name: g.name.clone(),
+                        project: None,
+                        source: "environment".to_string(),
+                        classification: "secret".to_string(),
+                        backend: "secret-service".to_string(),
+                        secret_ref: secret_ref.clone(),
+                        required: false,
+                    });
+                    environment_literals.insert(
+                        g.name.clone(),
+                        crate::profile::EnvLiteral::Secret {
+                            secret: secret_ref.clone(),
+                            required: false,
+                        },
+                    );
+                }
+                crate::classify::CaptureAction::Capture => {
+                    if let Some(v) = &g.value {
+                        environment_literals.insert(
+                            g.name.clone(),
+                            crate::profile::EnvLiteral::Value(v.clone()),
+                        );
+                    } else {
+                        excluded.push(format!("environment.{}: {}", g.name, policy.reason));
+                    }
+                }
+                _ => {
+                    // Unknown stays unknown (mapped, never dropped); the rest
+                    // is observed-with-reason in the excluded list.
+                    if g.classification == "unknown" {
+                        unknown.push(format!("environment.{}: {}", g.name, policy.reason));
+                    } else {
+                        excluded.push(format!("environment.{}: {}", g.name, policy.reason));
+                    }
+                }
+            }
+        }
+        if scan.global_env.len() > 512 {
+            excluded.push(format!(
+                "environment: {} variable(s) beyond 512-cap not evaluated",
+                scan.global_env.len() - 512
+            ));
+        }
+        manifest
+            .secrets
+            .sort_by(|a, b| (&a.project, &a.name).cmp(&(&b.project, &b.name)));
+    }
     let secrets_count = manifest.secrets.len();
     // Redacted = secret-like variables across all env files (metadata only).
     // File payloads excluded for secret content are reported in `excluded`;
@@ -331,17 +453,25 @@ pub fn run_capture(
     // --- Files entries (from payloads) ---
     let mut file_entries: Vec<FileEntry> = payloads
         .iter()
-        .map(|p| FileEntry {
-            target: p.target.clone(),
-            source: p.bundle_rel.clone(),
-            mode: Some(p.mode.clone()),
-            origin: Some(if p.target.starts_with("~/") {
-                "home".to_string()
-            } else {
-                "absolute".to_string()
-            }),
-            detected_by: Some("filesystem.discovery".to_string()),
-            classification: None,
+        .map(|p| {
+            // Record the discovery classification as provenance.
+            let class = crate::classify::classify_file(
+                &p.abs_source,
+                crate::classify::FileKind::Regular,
+                false,
+            );
+            FileEntry {
+                target: p.target.clone(),
+                source: p.bundle_rel.clone(),
+                mode: Some(p.mode.clone()),
+                origin: Some(if p.target.starts_with("~/") {
+                    "home".to_string()
+                } else {
+                    "absolute".to_string()
+                }),
+                detected_by: Some("filesystem.discovery".to_string()),
+                classification: Some(class.class.as_str().to_string()),
+            }
         })
         .collect();
     file_entries.sort_by(|a, b| a.target.cmp(&b.target));
@@ -353,6 +483,50 @@ pub fn run_capture(
         distro: scan.distro.clone(),
         kernel: scan.machine.as_ref().and_then(|m| m.kernel.clone()),
     };
+
+    // --- v2 services (user units reproduced; system units privileged) ---
+    let mut emitted_services: Vec<crate::profile::ServiceEntry> = Vec::new();
+    {
+        let mut user_count = 0usize;
+        let mut system_count = 0usize;
+        for s in &scan.services {
+            if !s.name.ends_with(".service") {
+                continue;
+            }
+            let user_scope = s.scope == "user";
+            let (decision, _class) = crate::capture_policy::decide_service(user_scope);
+            match decision.action {
+                crate::classify::CaptureAction::Capture => {
+                    if user_count >= 100 {
+                        continue;
+                    }
+                    user_count += 1;
+                    emitted_services.push(crate::profile::ServiceEntry {
+                        name: s.name.clone(),
+                        enabled: s.enabled,
+                        running: None,
+                        scope: Some("user".to_string()),
+                        classification: Some("reproducible".to_string()),
+                    });
+                }
+                _ => {
+                    if system_count >= 50 {
+                        continue;
+                    }
+                    system_count += 1;
+                    emitted_services.push(crate::profile::ServiceEntry {
+                        name: s.name.clone(),
+                        enabled: s.enabled,
+                        running: None,
+                        scope: Some("system".to_string()),
+                        classification: Some("privileged".to_string()),
+                    });
+                    // In-profile with explicit scope; plan gates execution
+                    // as PRIVILEGED (apply never touches these unprivileged).
+                }
+            }
+        }
+    }
 
     // --- v2 sections (all informational; plan/apply semantics unchanged) ---
     let machine = scan.machine.as_ref().map(|m| MachineSection {
@@ -419,6 +593,27 @@ pub fn run_capture(
     for p in &pkg.selected {
         lock_apt.insert(p.name.clone(), p.version.clone());
     }
+    // v1.1: lock versions for every other manager too (names only in the
+    // profile; versions live here). Capped to bound bundle size.
+    let mut lock_other: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    {
+        let mut total = 0usize;
+        for v in &scan.package_versions {
+            if total >= 20000 {
+                break;
+            }
+            if v.manager == "apt" || v.name.is_empty() || v.name.len() > 128 {
+                continue;
+            }
+            if let Some(version) = &v.version {
+                lock_other
+                    .entry(v.manager.clone())
+                    .or_default()
+                    .insert(v.name.clone(), version.clone());
+                total += 1;
+            }
+        }
+    }
 
     let mut profile = Profile {
         schema_version: SCHEMA_VERSION,
@@ -439,8 +634,12 @@ pub fn run_capture(
         toolchains,
         files: file_entries,
         directories,
-        environment: None,
-        services: Vec::new(),
+        environment: if environment_literals.is_empty() {
+            None
+        } else {
+            Some(environment_literals)
+        },
+        services: emitted_services,
         git,
         projects,
         mounts,
@@ -498,6 +697,51 @@ pub fn run_capture(
         unsupported,
         unknown,
         warnings: summary_warnings,
+        capture_actions: {
+            // Explicit per-resource accounting across every captured
+            // section: payloads, secret references, observed metadata.
+            let mut decisions = Vec::new();
+            for _ in &payloads {
+                decisions.push(crate::capture_policy::CaptureDecision::capture("file payload"));
+            }
+            for _ in 0..file_secret_excluded {
+                decisions.push(crate::capture_policy::CaptureDecision::reference("secret file"));
+            }
+            for _ in &profile.services {
+                decisions.push(crate::capture_policy::CaptureDecision::observe("service"));
+            }
+            for _ in &profile.mounts {
+                decisions.push(crate::capture_policy::CaptureDecision::observe("mount"));
+            }
+            for names in profile.packages.other.values() {
+                for _ in names {
+                    decisions.push(crate::capture_policy::CaptureDecision::capture("package name"));
+                }
+            }
+            for _ in &profile.toolchains {
+                decisions.push(crate::capture_policy::CaptureDecision::capture("toolchain"));
+            }
+            for _ in &profile.executables {
+                decisions.push(crate::capture_policy::CaptureDecision::observe("executable"));
+            }
+            if let Some(env) = &profile.environment {
+                for lit in env.values() {
+                    match lit {
+                        crate::profile::EnvLiteral::Value(_) => decisions.push(
+                            crate::capture_policy::CaptureDecision::capture("env literal"),
+                        ),
+                        crate::profile::EnvLiteral::Secret { .. } => decisions.push(
+                            crate::capture_policy::CaptureDecision::reference("env secret"),
+                        ),
+                    }
+                }
+            }
+            crate::capture_policy::summarize(&decisions)
+        },
+        toolchains: profile.toolchains.len(),
+        services: profile.services.len(),
+        env_literals: profile.environment.as_ref().map(|e| e.len()).unwrap_or(0),
+        directories: profile.directories.len(),
     };
 
     // --- Validation (fail-closed: never report success on invalid) ---
@@ -520,6 +764,7 @@ pub fn run_capture(
         lock: PackagesLock {
             schema_version: SCHEMA_VERSION,
             apt: lock_apt,
+            other: lock_other,
         },
         payloads,
         summary,
@@ -771,6 +1016,12 @@ pub mod configctl_discovery_stub {
         pub executables: Vec<ExecutableView>,
         /// project name → (markers, role counts).
         pub project_detail: std::collections::BTreeMap<String, (Vec<String>, Vec<(String, u64)>)>,
+        /// v1.1 systemd units to consider for emission.
+        pub services: Vec<ServiceView>,
+        /// v1.1 global environment to consider for emission.
+        pub global_env: Vec<GlobalEnvView>,
+        /// v1.1 (manager, name, version) for the packages lock.
+        pub package_versions: Vec<PackageVersionView>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -812,6 +1063,31 @@ pub mod configctl_discovery_stub {
         pub name: String,
         pub version: Option<String>,
         pub provenance: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ServiceView {
+        pub name: String,
+        pub scope: String,
+        pub enabled: Option<bool>,
+        pub active: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct GlobalEnvView {
+        pub name: String,
+        /// `secret` | `public_config` | `path` | `machine_specific` |
+        /// `runtime` | `unknown`.
+        pub classification: String,
+        /// Truncated value, only for display-safe names.
+        pub value: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct PackageVersionView {
+        pub manager: String,
+        pub name: String,
+        pub version: Option<String>,
     }
 
     #[derive(Debug, Clone)]

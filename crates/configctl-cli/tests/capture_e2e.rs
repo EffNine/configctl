@@ -188,6 +188,9 @@ fn core_capture_to(
             mounts: vec![],
             executables: vec![],
             project_detail: Default::default(),
+            services: vec![],
+            global_env: vec![],
+            package_versions: vec![],
         }
     };
     let values = scanner.registry().snapshot_values();
