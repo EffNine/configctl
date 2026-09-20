@@ -134,6 +134,12 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
         signals.push("vendored".to_string());
         return (ProjectFileRole::Dependency, signals);
     }
+    // Env files / schemas (purpose first; secrecy is tracked orthogonally
+    // by the env/secret pipeline, not by the content role).
+    if crate::env::is_env_filename(&name) {
+        signals.push("env_file".to_string());
+        return (ProjectFileRole::EnvSchema, signals);
+    }
     // Secrets by name (core registry: key basenames + extensions).
     if configctl_core::classify::SECRET_BASENAMES.iter().any(|b| *b == name)
         || configctl_core::classify::SECRET_EXTENSIONS.iter().any(|e| name.ends_with(e))
@@ -164,11 +170,6 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
     ) {
         signals.push("container".to_string());
         return (ProjectFileRole::Container, signals);
-    }
-    // Env files / schemas.
-    if crate::env::is_env_filename(&name) {
-        signals.push("env_file".to_string());
-        return (ProjectFileRole::EnvSchema, signals);
     }
     // Conventional source/script/config locations.
     if components.iter().any(|c| {

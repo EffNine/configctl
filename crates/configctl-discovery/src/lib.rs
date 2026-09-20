@@ -12,15 +12,19 @@
 //! - `scanner` — the scan service that composes everything
 
 pub mod config;
+pub mod credentials;
 pub mod env;
+pub mod environment;
 pub mod filesystem;
 pub mod git;
+pub mod hardware;
 pub mod inventory;
 pub mod mounts;
 pub mod packages;
 pub mod project;
 pub mod scanner;
 pub mod secret;
+pub mod services;
 pub mod system;
 pub mod toolchain;
 pub mod walker;

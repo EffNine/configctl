@@ -4,16 +4,20 @@
 //! system metadata into a single read-only pass. No mutation.
 
 use crate::config::{self, ConfigFileRecord};
+use crate::credentials::{self, CredentialInventory};
 use crate::env::{self, EnvFileRecord, GitStatus};
+use crate::environment::{self, EnvironmentInventory};
 use crate::filesystem::{
     DotfileRecord, ProjectContentSummary, categorize_dotfile, classify_project_file,
 };
 use crate::git;
+use crate::hardware::{self, HardwareInventory};
 use crate::inventory::InventoryCollector;
 use crate::mounts::{self, MountRecord};
 use crate::packages::{self, PackageInventory};
 use crate::project::{self, ProjectDetection};
 use crate::secret::{self, EntropyScorer};
+use crate::services::{self, ServiceInventory};
 use crate::system::{self, SystemInfo};
 use crate::toolchain::{self, ToolchainInventory};
 use crate::walker::{BoundedWalker, StopReason, Visit};
@@ -87,6 +91,18 @@ pub struct ScanResult {
     /// v1.1 scan completeness (observed / mapped / skipped + reasons).
     #[serde(default)]
     pub completeness: CompletenessReport,
+    /// v1.1 systemd units (user + system, read-only).
+    #[serde(default)]
+    pub services: ServiceInventory,
+    /// v1.1 process environment map (metadata only, never values).
+    #[serde(default)]
+    pub environment: EnvironmentInventory,
+    /// v1.1 hardware / system context (informational).
+    #[serde(default)]
+    pub hardware: HardwareInventory,
+    /// v1.1 SSH / GPG / cloud credential metadata (never material).
+    #[serde(default)]
+    pub credentials: CredentialInventory,
 }
 
 /// v1.1 filesystem summary.
@@ -160,6 +176,10 @@ pub struct ScanStats {
     pub symlinks_found: usize,
     /// v1.1: dotfiles discovered.
     pub dotfiles_found: usize,
+    /// v1.1: systemd units observed.
+    pub services_found: usize,
+    /// v1.1: environment variables mapped (metadata only).
+    pub env_vars_found: usize,
 }
 
 /// The scan service.
@@ -427,6 +447,37 @@ impl Scanner {
             warnings.push(format!("governor budget exhausted: {hit}"));
         }
 
+        // 8b. v1.1 services, environment, hardware, credentials. All
+        //     governor-bounded; unavailable sources are recorded, never fatal.
+        //     Mounts are discovered before traversal-dependent steps so the
+        //     hardware inventory can resolve the root filesystem.
+        let mount_records = mounts::collect();
+        let service_inventory = services::collect_services(&governor, runner);
+        warnings.extend(service_inventory.warnings.iter().cloned());
+        let environment_inventory = environment::collect_environment();
+        let home_dir = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let credential_inventory =
+            credentials::collect_credentials(&governor, runner, home_dir.as_deref());
+        warnings.extend(credential_inventory.warnings.iter().cloned());
+        let compilers: Vec<String> = toolchain_inv
+            .executables
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.name.as_str(),
+                    "gcc" | "g++" | "clang" | "clang++" | "rustc" | "go" | "javac" | "cc" | "c++"
+                )
+            })
+            .map(|e| {
+                e.version
+                    .as_deref()
+                    .map(|v| format!("{} ({v})", e.name))
+                    .unwrap_or_else(|| e.name.clone())
+            })
+            .collect();
+        let hardware_inventory =
+            hardware::collect_hardware(&governor, runner, &mount_records, compilers);
+
         // 9. v1.1 filesystem summary, project content roles, mounts,
         //    and the completeness report.
         let project_contents = summarize_project_contents(&projects, &walk.visited);
@@ -436,7 +487,6 @@ impl Scanner {
                 walk.visited_overflow
             ));
         }
-        let mount_records = mounts::collect();
         if walk_stats_total.mount_boundaries > 0 {
             warnings.push(format!(
                 "{} mount boundar(ies) recorded, not descended (see `mounts`)",
@@ -508,6 +558,8 @@ impl Scanner {
             executables_found: toolchain_inv.total,
             symlinks_found: filesystem.counters.symlinks as usize,
             dotfiles_found: filesystem.dotfiles_found,
+            services_found: service_inventory.services.len(),
+            env_vars_found: environment_inventory.total,
         };
 
         let timestamp = rfc3339_now();
@@ -543,6 +595,10 @@ impl Scanner {
             project_contents,
             mounts: mount_records,
             completeness,
+            services: service_inventory,
+            environment: environment_inventory,
+            hardware: hardware_inventory,
+            credentials: credential_inventory,
         }
     }
 }

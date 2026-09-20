@@ -201,6 +201,10 @@ fn unsafe_result() -> ScanResult {
         project_contents: Vec::new(),
         mounts: Vec::new(),
         completeness: Default::default(),
+        services: Default::default(),
+        environment: Default::default(),
+        hardware: Default::default(),
+        credentials: Default::default(),
     }
 }
 
@@ -243,6 +247,28 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
         out.push_str(&format!(
             "Filesystem\n  {} dotfiles, {} symlinks mapped, {} mounts recorded\n\n",
             s.dotfiles_found, s.symlinks_found, result.mounts.len()
+        ));
+        out.push_str(&format!(
+            "Services\n  {} units (user scope: {}, system scope: {})\n\n",
+            s.services_found,
+            bool_word(result.services.user_available),
+            bool_word(result.services.system_available)
+        ));
+        out.push_str(&format!(
+            "Environment\n  {} variables ({} secret, values never stored)\n\n",
+            s.env_vars_found, result.environment.secrets
+        ));
+        out.push_str(&format!(
+            "Hardware\n  {} / {} / {} / {} RAM KiB / {} GPU(s)\n\n",
+            result.hardware.arch,
+            result.hardware.distro.as_deref().unwrap_or("unknown distro"),
+            result.hardware.kernel.as_deref().unwrap_or("unknown kernel"),
+            result.hardware.memory.total_kib,
+            result.hardware.gpus.len()
+        ));
+        out.push_str(&format!(
+            "Credentials\n  {} metadata records (material never captured)\n\n",
+            result.credentials.credentials.len()
         ));
         // Completeness is always reported; PARTIAL names its reasons.
         out.push_str(&result.completeness.render_human());
@@ -295,8 +321,15 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
     out
 }
 
-fn distro_line(system: &configctl_discovery::SystemInfo) -> String {
-    match &system.distro {
+fn bool_word(b: bool) -> &'static str {
+    if b {
+        "available"
+    } else {
+        "unavailable"
+    }
+}
+
+fn distro_line(system: &configctl_discovery::SystemInfo) -> String {    match &system.distro {
         Some(d) => d.clone(),
         None => "Linux".into(),
     }
