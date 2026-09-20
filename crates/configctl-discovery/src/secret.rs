@@ -316,9 +316,22 @@ fn token_pattern_hit(value: &str) -> Option<&'static str> {
     {
         return Some("pem_private_key");
     }
-    // JWT
-    if v.len() > 20 && v.chars().filter(|&c| c == '.').count() == 2 {
-        return Some("jwt_like");
+    // JWT: three non-empty base64url segments (never an email address).
+    if v.len() > 20
+        && !v.contains(' ')
+        && !v.contains('@')
+        && v.chars().filter(|&c| c == '.').count() == 2
+    {
+        let segs: Vec<&str> = v.split('.').collect();
+        if segs.len() == 3
+            && segs.iter().all(|s| {
+                !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '=')
+            })
+        {
+            return Some("jwt_like");
+        }
     }
     // AWS access key: AKIA / ASIA + 16 alphanumerics
     if (v.starts_with("AKIA") || v.starts_with("ASIA"))

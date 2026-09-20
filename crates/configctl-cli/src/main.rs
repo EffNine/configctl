@@ -1,13 +1,14 @@
-//! configctl binary entry point (P1: read-only discovery).
+//! configctl binary entry point (P1 scan + P2 capture; both read-only w.r.t.
+//! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::scan;
+use configctl_cli::commands::{capture, scan};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(name = "configctl")]
-#[command(about = "Linux-first environment manager (P1: read-only discovery)")]
+#[command(about = "Linux-first environment manager (scan + capture; no mutation)")]
 #[command(version = "0.1.0")]
 struct Cli {
     #[command(subcommand)]
@@ -37,6 +38,39 @@ enum Cmd {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Capture observed state as a declarative, portable profile bundle
+    Capture {
+        /// Profile name (defaults to the output directory basename)
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+        /// Scan roots to capture from (may repeat; `--root` is an alias)
+        #[arg(long = "from", value_name = "PATH")]
+        from: Vec<String>,
+        /// Additional scan roots (alias for `--from`)
+        #[arg(long = "root", value_name = "PATH")]
+        extra_roots: Vec<String>,
+        /// Output directory for the profile bundle
+        #[arg(long = "output", alias = "out", value_name = "DIR")]
+        output: Option<String>,
+        /// Overwrite a non-empty output directory
+        #[arg(long)]
+        force: bool,
+        /// Maximum recursion depth for discovery
+        #[arg(long, value_name = "N")]
+        depth: Option<usize>,
+        /// Analyze without writing the profile
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Suppress non-essential output
+        #[arg(short, long)]
+        quiet: bool,
+        /// Increase diagnostic detail
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -45,7 +79,7 @@ fn main() -> ExitCode {
 
     let code = match &cli.command {
         None => {
-            eprintln!("configctl: no command given (try `configctl scan` or `configctl --help`)");
+            eprintln!("configctl: no command given (try `configctl scan`, `configctl capture`, or `configctl --help`)");
             ExitCode::from(2)
         }
         Some(Cmd::Scan {
@@ -83,6 +117,78 @@ fn main() -> ExitCode {
                         let text = scan::render_human(&out.result, *quiet, *verbose);
                         let text = registry.redact(&text);
                         print!("{text}");
+                    }
+                    ExitCode::SUCCESS
+                }
+            }
+        }
+        Some(Cmd::Capture {
+            name,
+            from,
+            extra_roots,
+            output,
+            force,
+            depth,
+            dry_run,
+            json,
+            quiet,
+            verbose,
+        }) => {
+            let out = capture::run_capture(
+                name.as_deref(),
+                from,
+                extra_roots,
+                output.as_deref(),
+                *force,
+                *depth,
+                *dry_run,
+                None,
+                &runner,
+            );
+            match &out.error_envelope {
+                Some(err) => {
+                    if *json {
+                        let s = out.registry.redact(&err.to_json());
+                        println!("{s}");
+                    } else {
+                        let msg = err.errors.first().map(|w| w.message.as_str()).unwrap_or("");
+                        eprintln!("error: {}", out.registry.redact(msg));
+                    }
+                    ExitCode::from(2)
+                }
+                None => {
+                    let registry = &out.registry;
+                    if *json {
+                        let res = out.result.as_ref().expect("capture result");
+                        let envelope = configctl_cli::render::Envelope::capture_ok(
+                            res,
+                            &out.written,
+                            &out.out_dir,
+                            out.dry_run,
+                        );
+                        let json_str = envelope.to_json();
+                        let json_str = registry.redact(&json_str);
+                        println!("{json_str}");
+                    } else {
+                        let text = capture::render_human(&out, *verbose);
+                        let text = registry.redact(&text);
+                        if *quiet {
+                            // Quiet: one-line summary only (still redacted).
+                            if let Some(res) = &out.result {
+                                let line = format!(
+                                    "captured {} (projects {} files {} packages {} env {} secrets {})\n",
+                                    res.profile.name,
+                                    res.summary.projects,
+                                    res.summary.files,
+                                    res.summary.packages,
+                                    res.summary.env_schemas,
+                                    res.summary.secrets,
+                                );
+                                print!("{}", registry.redact(&line));
+                            }
+                        } else {
+                            print!("{text}");
+                        }
                     }
                     ExitCode::SUCCESS
                 }

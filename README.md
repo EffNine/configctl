@@ -3,10 +3,13 @@
 > Discover, organize, reproduce and verify your Linux development environment:
 > dotfiles, packages, project `.env` files, configuration, and secrets.
 
-**Status: P1 — read-only discovery engine implemented.**
+**Status: P2 — declarative profile capture implemented.**
 `configctl scan` performs a bounded, read-only discovery of projects, `.env`
-files, config files, git tracking, and system metadata. No mutation.
-Capture/plan/apply/rollback are not yet implemented (P2+).
+files, config files, git tracking, and system metadata. `configctl capture`
+transforms observed state into a portable TOML profile bundle
+(`profile.toml`, `secrets.manifest.toml`, `env/*.toml`, `files/*`) with zero
+secret values. No mutation.
+Capture/plan/apply/rollback are not yet implemented (P3+).
 
 ## Documentation
 
@@ -21,6 +24,8 @@ Capture/plan/apply/rollback are not yet implemented (P2+).
 | [docs/TESTING_STRATEGY.md](docs/TESTING_STRATEGY.md) | Test pyramid, fixtures, safety tests, CI gates |
 | [docs/DEFERRED_FEATURES.md](docs/DEFERRED_FEATURES.md) | Explicit out-of-scope list for v0.1 |
 | [docs/DISCOVERY.md](docs/DISCOVERY.md) | P1 discovery engine: what scan finds, limits, redaction |
+| [docs/CAPTURE.md](docs/CAPTURE.md) | P2 capture: what gets captured, policies, secret handling |
+| [docs/PROFILE.md](docs/PROFILE.md) | P2 profile bundle format v1 (TOML), validation rules, examples |
 
 ## Build and test
 
@@ -35,7 +40,8 @@ $ cargo test --workspace
 $ configctl scan ~/projects          # read-only discovery
 $ configctl scan ~/projects --json   # machine-readable envelope
 $ configctl scan ~/projects -v       # verbose details
-$ configctl capture work             # not yet implemented (P2)
+$ configctl capture --output ./my-profile            # declarative bundle (P2)
+$ configctl capture --output ./my-profile --dry-run  # analyze without writing
 $ configctl plan work                # not yet implemented (P3)
 $ configctl apply work               # not yet implemented (P4)
 ```

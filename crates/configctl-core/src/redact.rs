@@ -115,6 +115,14 @@ impl SecretRegistry {
         g.exact.len()
     }
 
+    /// Snapshot registered values for in-memory safety checks (e.g. the P2
+    /// post-write leak check). The values never leave the process; callers
+    /// must never serialize, log, or render them.
+    pub fn snapshot_values(&self) -> Vec<String> {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.exact.iter().cloned().collect()
+    }
+
     /// Redact `text`: replace every exact-registered value with `<redacted>`
     /// and mask whitespace-delimited tokens that start with a registered
     /// prefix (`prefix` + `****`). Idempotent; running it twice yields the

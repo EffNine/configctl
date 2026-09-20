@@ -46,6 +46,39 @@ impl Envelope {
         }
     }
 
+    /// A success envelope wrapping a capture result.
+    pub fn capture_ok(
+        result: &configctl_core::capture::CaptureResult,
+        written: &[String],
+        out_dir: &std::path::Path,
+        dry_run: bool,
+    ) -> Self {
+        let profile_json = serde_json::to_value(&result.profile).unwrap_or_default();
+        let data = serde_json::json!({
+            "profile": profile_json,
+            "out_dir": out_dir.to_string_lossy(),
+            "written": written,
+            "dry_run": dry_run,
+            "summary": serde_json::to_value(&result.summary).unwrap_or_default(),
+        });
+        Self {
+            schema_version: 1,
+            command: "capture".into(),
+            status: "ok".into(),
+            data: Some(data),
+            warnings: result
+                .summary
+                .warnings
+                .iter()
+                .map(|w| Warning {
+                    code: "capture_warning".into(),
+                    message: w.clone(),
+                })
+                .collect(),
+            errors: Vec::new(),
+        }
+    }
+
     /// An error envelope (usage/configuration errors, exit 2).
     pub fn error(command: &str, message: &str, hint: &str) -> Self {
         Self {
