@@ -69,7 +69,8 @@ pub struct OpRecovery {
 
 /// Classify every operation of a plan from its journal.
 pub fn classify_plan(state_dir: &Path, plan_id: &str) -> Result<Vec<OpRecovery>, String> {
-    let (plan, _status, _) = crate::state::load_plan(state_dir, plan_id)?;
+    let (plan, _status, _) =
+        crate::state::load_plan(state_dir, plan_id).map_err(|e| e.to_string())?;
     let journal = crate::state::journal_for_plan(state_dir, plan_id)?;
     // Last phase per op (journal is in record order).
     let mut last: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
@@ -202,8 +203,11 @@ pub fn rollback_plan(
     opts: &RollbackOptions,
     approve: &dyn Fn(&RollbackReport) -> bool,
 ) -> Result<RollbackReport, RollbackError> {
-    let (plan, status, _) =
-        crate::state::load_plan(state_dir, plan_id).map_err(RollbackError::Conflict)?;
+    let (plan, status, _) = crate::state::load_plan(state_dir, plan_id).map_err(|e| match e {
+        crate::state::PlanLoadError::Unavailable(_) => RollbackError::Internal(e.to_string()),
+        crate::state::PlanLoadError::Invalid(_) => RollbackError::Usage(e.to_string()),
+        _ => RollbackError::Conflict(e.to_string()),
+    })?;
     match status.as_str() {
         "applied" | "partial" | "applying" => {}
         "planned" | "approved" => {

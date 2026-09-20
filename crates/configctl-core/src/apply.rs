@@ -109,7 +109,11 @@ pub fn apply_plan(
 ) -> Result<ApplyReport, ApplyError> {
     // 1. Load + verify hash (fail closed on tampering).
     let (plan, status, bundle_dir) =
-        crate::state::load_plan(state_dir, plan_id).map_err(ApplyError::Conflict)?;
+        crate::state::load_plan(state_dir, plan_id).map_err(|e| match e {
+            crate::state::PlanLoadError::Unavailable(_) => ApplyError::Internal(e.to_string()),
+            crate::state::PlanLoadError::Invalid(_) => ApplyError::Usage(e.to_string()),
+            _ => ApplyError::Conflict(e.to_string()),
+        })?;
 
     // 2. Execution-state gate.
     match status.as_str() {

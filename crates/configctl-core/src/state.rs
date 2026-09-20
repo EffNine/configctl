@@ -214,30 +214,77 @@ pub fn save_plan(dir: &Path, plan: &Plan, bundle_dir: &Path) -> Result<PathBuf, 
 
 /// Load a plan by id (verifies the stored hash matches the document).
 /// Returns `(plan, status, bundle_dir)`.
-pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String, PathBuf), String> {
-    if plan_id.contains('/') || plan_id.contains('\0') || plan_id.contains("..") {
-        return Err(format!("invalid plan id: {plan_id:?}"));
+/// Why a persisted plan could not be loaded.
+///
+/// Callers map these categories to exit semantics: `Unavailable` is an
+/// infrastructure failure (exit 1), `Invalid` is a usage error (exit 2), and
+/// `NotFound`/`Tampered` are conflict-class (exit 5, re-plan).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanLoadError {
+    /// The plan id itself is malformed.
+    Invalid(String),
+    /// The state store could not be opened or read (missing dir, IO,
+    /// permissions) — not a conflict.
+    Unavailable(String),
+    /// No plan with that id exists.
+    NotFound(String),
+    /// The plan document failed its integrity or hash check.
+    Tampered(String),
+}
+
+impl std::fmt::Display for PlanLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlanLoadError::Invalid(m)
+            | PlanLoadError::Unavailable(m)
+            | PlanLoadError::NotFound(m)
+            | PlanLoadError::Tampered(m) => f.write_str(m),
+        }
     }
-    let conn = open_db(dir)?;
+}
+
+impl std::error::Error for PlanLoadError {}
+
+pub fn load_plan(dir: &Path, plan_id: &str) -> Result<(Plan, String, PathBuf), PlanLoadError> {
+    if plan_id.contains('/') || plan_id.contains('\0') || plan_id.contains("..") {
+        return Err(PlanLoadError::Invalid(format!(
+            "invalid plan id: {plan_id:?}"
+        )));
+    }
+    let conn = match open_db(dir) {
+        Ok(conn) => conn,
+        // No state directory yet: no plan with this id can exist, so this is
+        // "unknown plan" (conflict-class), not an infrastructure failure.
+        Err(_) if !dir.is_dir() => {
+            return Err(PlanLoadError::NotFound(format!(
+                "unknown plan id: {plan_id:?} (no state store yet)"
+            )));
+        }
+        Err(e) => return Err(PlanLoadError::Unavailable(e)),
+    };
     let (plan_hash, status, bundle_dir): (String, String, String) = conn
         .query_row(
             "SELECT plan_hash, status, bundle_dir FROM plans WHERE id = ?1",
             params![plan_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .map_err(|_| format!("unknown plan id: {plan_id:?}"))?;
+        .map_err(|_| PlanLoadError::NotFound(format!("unknown plan id: {plan_id:?}")))?;
     let doc_path = dir.join("plans").join(format!("{plan_id}.json"));
-    let text = std::fs::read_to_string(&doc_path).map_err(|e| format!("read plan doc: {e:?}"))?;
-    let plan: Plan = serde_json::from_str(&text).map_err(|e| format!("parse plan doc: {e}"))?;
+    let text = std::fs::read_to_string(&doc_path)
+        .map_err(|e| PlanLoadError::Unavailable(format!("read plan doc: {e:?}")))?;
+    let plan: Plan = serde_json::from_str(&text)
+        .map_err(|e| PlanLoadError::Tampered(format!("parse plan doc: {e}")))?;
     if plan.plan_hash != plan_hash || plan.plan_id != plan_id {
-        return Err(format!("plan {plan_id} failed integrity check (tampered?)"));
+        return Err(PlanLoadError::Tampered(format!(
+            "plan {plan_id} failed integrity check (tampered?)"
+        )));
     }
     // Recompute the semantic hash to detect on-disk edits.
     let recomputed = crate::plan::compute_plan_hash(&plan);
     if recomputed != plan.plan_hash {
-        return Err(format!(
+        return Err(PlanLoadError::Tampered(format!(
             "plan {plan_id} hash mismatch: document was modified after creation"
-        ));
+        )));
     }
     Ok((plan, status, PathBuf::from(bundle_dir)))
 }
@@ -466,4 +513,44 @@ pub fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exit-code semantics depend on this classification.
+    #[test]
+    fn load_plan_classifies_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // No state store yet -> no plan can exist (conflict-class).
+        let missing = tmp.path().join("no-state");
+        match load_plan(&missing, "p-1") {
+            Err(PlanLoadError::NotFound(_)) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // A real but empty state store -> no such plan.
+        let state = tmp.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        match load_plan(&state, "p-1") {
+            Err(PlanLoadError::NotFound(_)) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // Malformed id -> usage error.
+        match load_plan(&state, "../escape") {
+            Err(PlanLoadError::Invalid(_)) => {}
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+
+        // Store present but broken (db path is a directory) -> infrastructure.
+        let broken = tmp.path().join("broken");
+        std::fs::create_dir_all(broken.join("state.db")).unwrap();
+        match load_plan(&broken, "p-1") {
+            Err(PlanLoadError::Unavailable(_)) => {}
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
 }
