@@ -354,7 +354,10 @@ pub fn classify_file(path: &Path, kind: FileKind, executable: bool) -> Classific
     }
 
     // 4. Generated / cache content (any path component).
-    if let Some(hit) = GENERATED_DIRS.iter().find(|d| components.iter().any(|c| c == *d)) {
+    if let Some(hit) = GENERATED_DIRS
+        .iter()
+        .find(|d| components.iter().any(|c| c == *d))
+    {
         return Classification::new(
             ResourceClass::Generated,
             Reproducibility::Reproduce,
@@ -363,7 +366,10 @@ pub fn classify_file(path: &Path, kind: FileKind, executable: bool) -> Classific
             format!("generated build artifact under `{hit}/`; excluded from reproduction"),
         );
     }
-    if let Some(hit) = CACHE_DIRS.iter().find(|d| components.iter().any(|c| c == *d)) {
+    if let Some(hit) = CACHE_DIRS
+        .iter()
+        .find(|d| components.iter().any(|c| c == *d))
+    {
         return Classification::new(
             ResourceClass::Cache,
             Reproducibility::Unsupported,
@@ -506,10 +512,10 @@ pub const CONFIG_EXTENSIONS: &[&str] = &[
 
 /// True when the file is recognized portable configuration.
 fn is_portable_config(name: &str, path: &Path) -> bool {
-    if PORTABLE_CONFIG_NAMES.iter().any(|b| *b == name) {
+    if PORTABLE_CONFIG_NAMES.contains(&name) {
         return true;
     }
-    if MANIFEST_NAMES.iter().any(|b| *b == name) {
+    if MANIFEST_NAMES.contains(&name) {
         return true;
     }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -521,7 +527,8 @@ fn is_portable_config(name: &str, path: &Path) -> bool {
 }
 
 /// Lockfile basenames (regenerable from their manifest).
-fn is_lockfile(name: &str) -> bool {    matches!(
+fn is_lockfile(name: &str) -> bool {
+    matches!(
         name,
         "Cargo.lock"
             | "package-lock.json"
@@ -598,7 +605,14 @@ pub fn classify_env_var(name: &str) -> EnvClass {
     }
     if matches!(
         upper.as_str(),
-        "HOME" | "USER" | "HOSTNAME" | "HOST" | "MACHINE" | "DISPLAY" | "XDG_RUNTIME_DIR" | "DBUS_SESSION_BUS_ADDRESS"
+        "HOME"
+            | "USER"
+            | "HOSTNAME"
+            | "HOST"
+            | "MACHINE"
+            | "DISPLAY"
+            | "XDG_RUNTIME_DIR"
+            | "DBUS_SESSION_BUS_ADDRESS"
     ) || upper.starts_with("XDG_")
         || upper == "SHELL"
         || upper == "TERM_PROGRAM"

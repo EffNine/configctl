@@ -373,8 +373,7 @@ fn execute_op(
     // hand-edited plans). Old plans without the field default to
     // SAFE_REPRODUCE, preserving v1 behavior exactly.
     if let Some(reason) = refusal_for_class(op.action_class) {
-        journal(PH_INTENT, None, Some(reason))
-            .map_err(ApplyError::Internal)?;
+        journal(PH_INTENT, None, Some(reason)).map_err(ApplyError::Internal)?;
         return Ok(None);
     }
 

@@ -432,9 +432,9 @@ impl Profile {
         self.services.sort_by(|a, b| a.name.cmp(&b.name));
         self.mounts.sort_by(|a, b| a.mountpoint.cmp(&b.mountpoint));
         self.executables.sort_by(|a, b| a.name.cmp(&b.name));
-        self.hardware
-            .as_mut()
-            .map(|h| h.compilers.sort());
+        if let Some(h) = self.hardware.as_mut() {
+            h.compilers.sort();
+        }
         self.projects.sort_by(|a, b| a.path.cmp(&b.path));
         for p in &mut self.projects {
             p.ecosystems.sort();
@@ -502,9 +502,9 @@ impl Profile {
             for (manager, names) in &self.packages.other {
                 if manager.is_empty()
                     || manager.len() > 32
-                    || !manager
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+                    || !manager.chars().all(|c| {
+                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
+                    })
                 {
                     errors.push(format!("invalid package manager: {manager:?}"));
                     continue;
@@ -524,7 +524,11 @@ impl Profile {
         {
             let mut seen = std::collections::BTreeSet::new();
             for t in &self.toolchains {
-                if t.name.is_empty() || t.name.len() > 128 || t.name.contains('\0') || t.name.contains('/') {
+                if t.name.is_empty()
+                    || t.name.len() > 128
+                    || t.name.contains('\0')
+                    || t.name.contains('/')
+                {
                     errors.push(format!("invalid toolchain name: {:?}", t.name));
                 }
                 if let Some(v) = &t.version {

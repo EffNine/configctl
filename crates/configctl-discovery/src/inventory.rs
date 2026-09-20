@@ -4,8 +4,10 @@
 //! with a bounded chain walk (cycle detection, max depth 16); nothing is
 //! ever followed outside the recorded relationship.
 
-use configctl_core::classify::{FileKind, classify_file};
-use configctl_core::inventory::{CompletenessReport, FilesystemEntry, InventoryCounters, SymlinkRecord};
+use configctl_core::classify::{classify_file, FileKind};
+use configctl_core::inventory::{
+    CompletenessReport, FilesystemEntry, InventoryCounters, SymlinkRecord,
+};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -105,7 +107,12 @@ impl InventoryCollector {
     }
 
     /// Observe a regular file with classification evidence.
-    pub fn observe_file(&mut self, path: &Path, size: Option<u64>, executable: bool) -> FilesystemEntry {
+    pub fn observe_file(
+        &mut self,
+        path: &Path,
+        size: Option<u64>,
+        executable: bool,
+    ) -> FilesystemEntry {
         self.counters.files += 1;
         if executable {
             self.counters.executables += 1;
@@ -191,7 +198,7 @@ struct ChainResolution {
 }
 
 /// Follow a symlink chain without ever opening the target: only `read_link`
-/// + `symlink_metadata` (lstat-equivalent), bounded by `max_depth`, with
+/// plus `symlink_metadata` (lstat-equivalent), bounded by `max_depth`, with
 /// cycle detection over visited paths.
 fn resolve_chain(start: &Path, max_depth: usize) -> ChainResolution {
     let mut seen: HashSet<PathBuf> = HashSet::new();

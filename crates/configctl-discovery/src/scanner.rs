@@ -8,7 +8,7 @@ use crate::credentials::{self, CredentialInventory};
 use crate::env::{self, EnvFileRecord, GitStatus};
 use crate::environment::{self, EnvironmentInventory};
 use crate::filesystem::{
-    DotfileRecord, ProjectContentSummary, categorize_dotfile, classify_project_file,
+    categorize_dotfile, classify_project_file, DotfileRecord, ProjectContentSummary,
 };
 use crate::git;
 use crate::hardware::{self, HardwareInventory};
@@ -21,7 +21,7 @@ use crate::services::{self, ServiceInventory};
 use crate::system::{self, SystemInfo};
 use crate::toolchain::{self, ToolchainInventory};
 use crate::walker::{BoundedWalker, StopReason, Visit};
-use configctl_core::classify::{FileKind, classify_file};
+use configctl_core::classify::{classify_file, FileKind};
 use configctl_core::command::CommandRunner;
 use configctl_core::governor::{GovernorBudgets, GovernorSnapshot, ResourceGovernor};
 use configctl_core::inventory::{CompletenessReport, InventoryCounters, SymlinkRecord};
@@ -214,7 +214,7 @@ impl Scanner {
 
         // 1. System metadata
         let scratch = std::env::temp_dir();
-        let system = system::collect(runner, &scratch);
+        let system = system::collect(&governor, runner, &scratch);
 
         let mut warnings: Vec<String> = Vec::new();
         let mut walk_stats_total = WalkStats::default();
@@ -431,7 +431,7 @@ impl Scanner {
         // 8. v1.1 package + toolchain provenance. Runs after git tracking so
         //    canned test outputs are consumed by their intended probes first.
         //    Every probe is governor-bounded; failures are recorded, never fatal.
-        let mut package_inventory = packages::collect_packages(&governor, runner);
+        let package_inventory = packages::collect_packages(&governor, runner);
         let mut toolchain_inv = toolchain::discover_executables(&governor, runner);
         // Bound report size: counts stay complete, lists truncate explicitly.
         if toolchain_inv.executables.len() > 5000 {
@@ -527,6 +527,17 @@ impl Scanner {
         }
         if governor.limit_hit().is_some() {
             completeness.record_skip("budget_exhausted", 1);
+        }
+        // v1 traversal limits are budgets too: a depth/file/byte/finding
+        // stop means the scan did not see everything — PARTIAL, named.
+        for reason in &walk_stats_total.stop_reasons {
+            match reason.as_str() {
+                "depth_limit" | "file_count_limit" | "byte_limit" | "finding_limit"
+                | "governor_limit" => {
+                    completeness.record_skip(&format!("limit:{reason}"), 1);
+                }
+                _ => {}
+            }
         }
         // Observed = everything the scan encountered (mapped + skipped);
         // without this, a budget-stopped scan would still read 100%.
@@ -740,22 +751,21 @@ fn summarize_project_contents(
 ) -> Vec<ProjectContentSummary> {
     // Deepest project root first so nested projects own their files.
     let mut roots: Vec<&ProjectRecord> = projects.iter().collect();
-    roots.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+    roots.sort_by_key(|b| std::cmp::Reverse(b.path.len()));
     let mut summaries: BTreeMap<String, ProjectContentSummary> = BTreeMap::new();
     for (path, size, executable) in visited {
         let path_str = path.to_string_lossy();
-        let owner = roots
-            .iter()
-            .find(|p| path_str.starts_with(p.path.as_str()));
+        let owner = roots.iter().find(|p| path_str.starts_with(p.path.as_str()));
         let Some(owner) = owner else { continue };
-        let summary = summaries
-            .entry(owner.path.clone())
-            .or_insert_with(|| ProjectContentSummary {
-                project: owner.name.clone(),
-                path: owner.path.clone(),
-                roles: BTreeMap::new(),
-                total: 0,
-            });
+        let summary =
+            summaries
+                .entry(owner.path.clone())
+                .or_insert_with(|| ProjectContentSummary {
+                    project: owner.name.clone(),
+                    path: owner.path.clone(),
+                    roles: BTreeMap::new(),
+                    total: 0,
+                });
         let (role, _signals) = classify_project_file(path, *executable, *size);
         *summary.roles.entry(role.as_str().to_string()).or_insert(0) += 1;
         summary.total += 1;

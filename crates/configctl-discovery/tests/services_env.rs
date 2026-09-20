@@ -45,8 +45,15 @@ fn systemd_user_units_parsed_with_states() {
     assert!(!inv.system_available);
     let names: Vec<&str> = inv.services.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"syncthing.service"));
-    assert!(!names.iter().any(|n| n.contains(';')), "hostile unit dropped");
-    let sync = inv.services.iter().find(|s| s.name == "syncthing.service").unwrap();
+    assert!(
+        !names.iter().any(|n| n.contains(';')),
+        "hostile unit dropped"
+    );
+    let sync = inv
+        .services
+        .iter()
+        .find(|s| s.name == "syncthing.service")
+        .unwrap();
     assert_eq!(sync.enabled, Some(true));
     assert_eq!(sync.active.as_deref(), Some("active/running"));
     assert_eq!(
@@ -69,8 +76,16 @@ fn environment_maps_names_never_secret_values() {
         assert!(!analysis.entries.is_empty());
     }
     // Secret vars carry no value and no path analysis.
-    for v in inv.vars.iter().filter(|v| v.classification == configctl_core::classify::EnvClass::Secret) {
-        assert!(v.value.is_none(), "secret {} must not store a value", v.name);
+    for v in inv
+        .vars
+        .iter()
+        .filter(|v| v.classification == configctl_core::classify::EnvClass::Secret)
+    {
+        assert!(
+            v.value.is_none(),
+            "secret {} must not store a value",
+            v.name
+        );
         assert!(v.path_analysis.is_none());
     }
 }
@@ -82,13 +97,21 @@ fn credential_metadata_without_material() {
     let ssh = home.join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
     std::fs::write(ssh.join("config"), "Host example\n  HostName example.com\n").unwrap();
-    std::fs::write(ssh.join("known_hosts"), "example.com ssh-ed25519 AAAA\n# comment\n").unwrap();
+    std::fs::write(
+        ssh.join("known_hosts"),
+        "example.com ssh-ed25519 AAAA\n# comment\n",
+    )
+    .unwrap();
     std::fs::write(ssh.join("id_ed25519"), "PRIVATE-MATERIAL-CANARY-12345\n").unwrap();
     std::fs::write(ssh.join("id_ed25519.pub"), "ssh-ed25519 AAAA user@host\n").unwrap();
     std::fs::create_dir_all(home.join(".gnupg")).unwrap();
     std::fs::write(home.join(".gnupg/gpg.conf"), "use-agent\n").unwrap();
     std::fs::create_dir_all(home.join(".aws")).unwrap();
-    std::fs::write(home.join(".aws/credentials"), "[default]\naws_secret_access_key = CANARY\n").unwrap();
+    std::fs::write(
+        home.join(".aws/credentials"),
+        "[default]\naws_secret_access_key = CANARY\n",
+    )
+    .unwrap();
 
     let runner = FakeCommandRunner::new(); // git helper + ssh-keygen unavailable
     let inv = collect_credentials(&governor(), &runner, Some(home));
@@ -98,16 +121,33 @@ fn credential_metadata_without_material() {
         .iter()
         .find(|c| c.path.ends_with("id_ed25519") && !c.path.ends_with(".pub"))
         .expect("private key recorded");
-    assert_eq!(privkey.classification, configctl_core::classify::ResourceClass::Secret);
-    assert_eq!(privkey.action, configctl_core::classify::CaptureAction::Reference);
+    assert_eq!(
+        privkey.classification,
+        configctl_core::classify::ResourceClass::Secret
+    );
+    assert_eq!(
+        privkey.action,
+        configctl_core::classify::CaptureAction::Reference
+    );
     // Public key: type detected from public material, capturable.
-    let pubkey = inv.credentials.iter().find(|c| c.path.ends_with(".pub")).expect("pub recorded");
+    let pubkey = inv
+        .credentials
+        .iter()
+        .find(|c| c.path.ends_with(".pub"))
+        .expect("pub recorded");
     assert_eq!(pubkey.detail.as_deref(), Some("ssh-ed25519"));
     // known_hosts: entry count only.
-    let kh = inv.credentials.iter().find(|c| c.path.ends_with("known_hosts")).unwrap();
+    let kh = inv
+        .credentials
+        .iter()
+        .find(|c| c.path.ends_with("known_hosts"))
+        .unwrap();
     assert_eq!(kh.detail.as_deref(), Some("1 host entries"));
     // AWS credentials: existence only.
-    assert!(inv.credentials.iter().any(|c| c.path.ends_with(".aws/credentials")));
+    assert!(inv
+        .credentials
+        .iter()
+        .any(|c| c.path.ends_with(".aws/credentials")));
     // No record anywhere contains private material.
     let json = serde_json::to_string(&inv).unwrap();
     assert!(!json.contains("PRIVATE-MATERIAL-CANARY-12345"));
@@ -144,7 +184,11 @@ fn env_files_mapped_inside_projects_with_roles() {
     };
     let result = scanner.scan(&opts, &runner);
     assert_eq!(result.env_files.len(), 2);
-    let content = result.project_contents.iter().find(|c| c.project == "web").expect("roles");
+    let content = result
+        .project_contents
+        .iter()
+        .find(|c| c.project == "web")
+        .expect("roles");
     assert_eq!(content.roles.get("env_schema"), Some(&2));
     assert_eq!(content.roles.get("manifest"), Some(&1));
     let _ = Path::new(".");

@@ -444,7 +444,7 @@ fn git_commands_use_fixed_argv_no_shell() {
         assert!(
             matches!(
                 sub,
-                "rev-parse" | "status" | "ls-files" | "check-ignore" | "--version"
+                "rev-parse" | "status" | "ls-files" | "check-ignore" | "--version" | "config"
             ),
             "unexpected git subcommand: {sub}"
         );

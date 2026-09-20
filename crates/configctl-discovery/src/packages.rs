@@ -6,7 +6,7 @@
 //! established. Never installs, never mutates, never shells out.
 
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{ResourceGovernor, governed_run};
+use configctl_core::governor::{governed_run, ResourceGovernor};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -96,7 +96,6 @@ fn sanitize_version(raw: &str) -> Option<String> {
 fn probe(
     governor: &Arc<ResourceGovernor>,
     runner: &dyn CommandRunner,
-    manager: &str,
     program: &str,
     args: &[&str],
     parse: impl Fn(&str) -> Vec<PackageRecord>,
@@ -123,7 +122,7 @@ fn apt_parse(text: &str) -> Vec<PackageRecord> {
         let (Some(name), Some(version)) = (sanitize_name(name), sanitize_version(version)) else {
             continue;
         };
-        let arch = parts.next().and_then(|a| sanitize_name(a));
+        let arch = parts.next().and_then(sanitize_name);
         out.push(PackageRecord {
             name,
             version: Some(version),
@@ -145,7 +144,8 @@ fn snap_parse(text: &str) -> Vec<PackageRecord> {
         if cols.len() < 2 {
             continue;
         }
-        let (Some(name), Some(version)) = (sanitize_name(cols[0]), sanitize_version(cols[1])) else {
+        let (Some(name), Some(version)) = (sanitize_name(cols[0]), sanitize_version(cols[1]))
+        else {
             continue;
         };
         out.push(PackageRecord {
@@ -420,9 +420,17 @@ pub fn collect_packages(
 
     // (manager, program, argv)
     let probes: Vec<(&str, &str, Vec<&str>)> = vec![
-        ("apt", "dpkg-query", vec!["-W", "-f=${Package}\t${Version}\t${Architecture}\n"]),
+        (
+            "apt",
+            "dpkg-query",
+            vec!["-W", "-f=${Package}\t${Version}\t${Architecture}\n"],
+        ),
         ("snap", "snap", vec!["list"]),
-        ("flatpak", "flatpak", vec!["list", "--app", "--columns=application,version,arch"]),
+        (
+            "flatpak",
+            "flatpak",
+            vec!["list", "--app", "--columns=application,version,arch"],
+        ),
         ("cargo", "cargo", vec!["install", "--list"]),
         ("rustup", "rustup", vec!["toolchain", "list"]),
         ("npm", "npm", vec!["ls", "-g", "--depth=0"]),
@@ -448,8 +456,7 @@ pub fn collect_packages(
             "asdf" => asdf_parse(text),
             _ => Vec::new(),
         };
-        let (mut records, available, truncated) =
-            probe(governor, runner, manager, program, args, parse);
+        let (mut records, available, truncated) = probe(governor, runner, program, args, parse);
         if available {
             for r in records.iter_mut() {
                 if r.provenance == "unknown" {
@@ -480,14 +487,17 @@ pub fn collect_packages(
         }
     }
 
-    inv.packages.sort_by(|a, b| (&a.manager, &a.name).cmp(&(&b.manager, &b.name)));
-    inv.packages.dedup_by(|a, b| a.manager == b.manager && a.name == b.name);
+    inv.packages
+        .sort_by(|a, b| (&a.manager, &a.name).cmp(&(&b.manager, &b.name)));
+    inv.packages
+        .dedup_by(|a, b| a.manager == b.manager && a.name == b.name);
     inv.total = inv.packages.len();
     if inv.packages.len() > MAX_TOTAL {
         inv.packages.truncate(MAX_TOTAL);
         inv.truncated = true;
-        inv.warnings
-            .push(format!("package inventory truncated to {MAX_TOTAL} entries"));
+        inv.warnings.push(format!(
+            "package inventory truncated to {MAX_TOTAL} entries"
+        ));
     }
     inv.managers.sort_by(|a, b| a.manager.cmp(&b.manager));
     inv

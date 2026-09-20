@@ -24,10 +24,14 @@ fn governor() -> Arc<ResourceGovernor> {
 fn apt_and_cargo_managers_parse_with_provenance() {
     let runner = FakeCommandRunner::new();
     // Probe order: apt, snap, flatpak, cargo, rustup, npm, pip, pipx, uv, mise, asdf.
-    runner.queue(ok("git\t1:2.43.0-1ubuntu1\tamd64\nripgrep\t14.1.0-1\tamd64\n"));
+    runner.queue(ok(
+        "git\t1:2.43.0-1ubuntu1\tamd64\nripgrep\t14.1.0-1\tamd64\n",
+    ));
     runner.queue(CommandOutput::default()); // snap missing
     runner.queue(CommandOutput::default()); // flatpak missing
-    runner.queue(ok("ripgrep v14.1.0:\n    rg (executable)\nbat v0.24.0:\n    bat (executable)\n"));
+    runner.queue(ok(
+        "ripgrep v14.1.0:\n    rg (executable)\nbat v0.24.0:\n    bat (executable)\n",
+    ));
     // The rest get the default (unavailable) output.
 
     let inv = collect_packages(&governor(), &runner);
@@ -38,9 +42,15 @@ fn apt_and_cargo_managers_parse_with_provenance() {
     assert_eq!(apt[0].arch.as_deref(), Some("amd64"));
     assert_eq!(apt[0].provenance, "dpkg");
 
-    let cargo: Vec<_> = inv.packages.iter().filter(|p| p.manager == "cargo").collect();
+    let cargo: Vec<_> = inv
+        .packages
+        .iter()
+        .filter(|p| p.manager == "cargo")
+        .collect();
     assert_eq!(cargo.len(), 2);
-    assert!(cargo.iter().any(|p| p.name == "ripgrep" && p.version.as_deref() == Some("14.1.0")));
+    assert!(cargo
+        .iter()
+        .any(|p| p.name == "ripgrep" && p.version.as_deref() == Some("14.1.0")));
     assert!(cargo.iter().all(|p| p.explicit == Some(true)));
 
     let managers: Vec<&str> = inv.managers.iter().map(|m| m.manager.as_str()).collect();
@@ -55,7 +65,9 @@ fn apt_and_cargo_managers_parse_with_provenance() {
 #[test]
 fn hostile_manager_output_cannot_inject() {
     let runner = FakeCommandRunner::new();
-    runner.queue(ok("good-pkg\t1.0\tamd64\n$(evil)\t1.0\tamd64\n../../etc\t1.0\tamd64\n"));
+    runner.queue(ok(
+        "good-pkg\t1.0\tamd64\n$(evil)\t1.0\tamd64\n../../etc\t1.0\tamd64\n",
+    ));
     let inv = collect_packages(&governor(), &runner);
     let apt: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apt").collect();
     assert_eq!(apt.len(), 1);
@@ -66,9 +78,15 @@ fn hostile_manager_output_cannot_inject() {
 fn unknown_provenance_is_explicit() {
     let runner = FakeCommandRunner::new();
     runner.queue(CommandOutput::default()); // apt missing
-    runner.queue(ok("Name  Version  Rev  Tracking  Publisher  Notes\ncode 1.2.3 100 stable vscode classic\n"));
+    runner.queue(ok(
+        "Name  Version  Rev  Tracking  Publisher  Notes\ncode 1.2.3 100 stable vscode classic\n",
+    ));
     let inv = collect_packages(&governor(), &runner);
-    let snap: Vec<_> = inv.packages.iter().filter(|p| p.manager == "snap").collect();
+    let snap: Vec<_> = inv
+        .packages
+        .iter()
+        .filter(|p| p.manager == "snap")
+        .collect();
     assert_eq!(snap.len(), 1);
     assert!(!snap[0].provenance.is_empty());
 }
@@ -97,7 +115,12 @@ fn version_probe_only_runs_for_registry_names() {
     let runner = FakeCommandRunner::new();
     runner.queue(ok("cargo 1.97.1 (8bab26f4f 2026-07-14)\n"));
     let gov = governor();
-    let v = probe_version(&gov, &runner, std::path::Path::new("/usr/bin/cargo"), "cargo");
+    let v = probe_version(
+        &gov,
+        &runner,
+        std::path::Path::new("/usr/bin/cargo"),
+        "cargo",
+    );
     assert_eq!(v.as_deref(), Some("cargo 1.97.1 (8bab26f4f 2026-07-14)"));
 
     // Unlisted binary: no subprocess, even though a binary exists there.

@@ -7,7 +7,7 @@
 
 use configctl_core::classify::{Reproducibility, ResourceClass};
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{ResourceGovernor, governed_run};
+use configctl_core::governor::{governed_run, ResourceGovernor};
 use std::sync::Arc;
 
 /// Maximum units retained per scope.
@@ -174,7 +174,12 @@ fn probe_unit_detail(
     if user {
         args.push("--user");
     }
-    args.extend(["show", name, "-p", "FragmentPath,DropInPaths,Restart,WantedBy"]);
+    args.extend([
+        "show",
+        name,
+        "-p",
+        "FragmentPath,DropInPaths,Restart,WantedBy",
+    ]);
     let out = match governed_run(governor, runner, "systemctl", args.iter()) {
         Ok(o) if o.status == Some(0) => o,
         _ => return (None, Vec::new(), None, None),
@@ -212,7 +217,11 @@ pub fn collect_services(
     let mut inv = ServiceInventory::default();
 
     for user in [true, false] {
-        let scope = if user { UnitScope::User } else { UnitScope::System };
+        let scope = if user {
+            UnitScope::User
+        } else {
+            UnitScope::System
+        };
         let Some(maps) = probe_scope(governor, runner, user) else {
             if user {
                 inv.user_available = false;

@@ -112,7 +112,10 @@ pub fn run_migrate(profile_arg: &str, to: u32) -> Result<String, String> {
     profile.canonicalize();
     let errors = profile.validate();
     if !errors.is_empty() {
-        return Err(format!("migrated profile invalid:\n  - {}", errors.join("\n  - ")));
+        return Err(format!(
+            "migrated profile invalid:\n  - {}",
+            errors.join("\n  - ")
+        ));
     }
     let text = profile.to_toml()?;
     let target = dir.join("profile.toml");

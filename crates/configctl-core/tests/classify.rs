@@ -1,8 +1,8 @@
 //! v1.1 classification model tests: unknown → classify → preserve.
 
 use configctl_core::classify::{
-    CaptureAction, EnvClass, FileKind, PlanActionClass, Reproducibility, ResourceClass,
-    classify_env_var, classify_file, plan_class_for,
+    classify_env_var, classify_file, plan_class_for, CaptureAction, EnvClass, FileKind,
+    PlanActionClass, Reproducibility, ResourceClass,
 };
 use std::path::Path;
 
@@ -22,10 +22,7 @@ fn secret_filenames_are_reference_only() {
     ] {
         let c = classify(name);
         assert!(
-            matches!(
-                c.class,
-                ResourceClass::Secret | ResourceClass::Credential
-            ),
+            matches!(c.class, ResourceClass::Secret | ResourceClass::Credential),
             "{name}: {:?}",
             c.class
         );
@@ -47,7 +44,10 @@ fn public_keys_are_capturable() {
 fn generated_and_cache_dirs_are_excluded_with_reason() {
     for (path, class) in [
         ("/home/u/proj/target/debug/app", ResourceClass::Generated),
-        ("/home/u/proj/node_modules/react/index.js", ResourceClass::Generated),
+        (
+            "/home/u/proj/node_modules/react/index.js",
+            ResourceClass::Generated,
+        ),
         ("/home/u/proj/dist/bundle.js", ResourceClass::Generated),
         ("/home/u/.cache/mozilla/x", ResourceClass::Cache),
         ("/home/u/proj/__pycache__/a.pyc", ResourceClass::Generated),
@@ -109,7 +109,12 @@ fn unknown_files_are_preserved_not_dropped() {
 
 #[test]
 fn special_files_are_observed_never_read() {
-    for kind in [FileKind::Socket, FileKind::Fifo, FileKind::BlockDevice, FileKind::CharDevice] {
+    for kind in [
+        FileKind::Socket,
+        FileKind::Fifo,
+        FileKind::BlockDevice,
+        FileKind::CharDevice,
+    ] {
         let c = classify_file(Path::new("/dev/x"), kind, false);
         assert_eq!(c.class, ResourceClass::Unsupported);
         assert_eq!(c.action, CaptureAction::Observe);

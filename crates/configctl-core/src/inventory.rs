@@ -166,7 +166,10 @@ impl CompletenessReport {
         for (reason, count) in reasons {
             out.push_str(&format!("    {reason}: {count}\n"));
         }
-        out.push_str(&format!("  completeness: {:.2}%\n", self.completeness_pct()));
+        out.push_str(&format!(
+            "  completeness: {:.2}%\n",
+            self.completeness_pct()
+        ));
         match self.status {
             Some(ScanStatus::Complete) => out.push_str("  status: COMPLETE\n"),
             Some(ScanStatus::Partial) => out.push_str("  status: PARTIAL\n"),

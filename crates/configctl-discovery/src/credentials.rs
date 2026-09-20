@@ -8,7 +8,7 @@
 
 use configctl_core::classify::{CaptureAction, ResourceClass};
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{ResourceGovernor, governed_run};
+use configctl_core::governor::{governed_run, ResourceGovernor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -92,8 +92,13 @@ fn fingerprint_public_key(
     runner: &dyn CommandRunner,
     pub_path: &Path,
 ) -> Option<String> {
-    let out = governed_run(governor, runner, "ssh-keygen", ["-lf", &pub_path.to_string_lossy()].iter())
-        .ok()?;
+    let out = governed_run(
+        governor,
+        runner,
+        "ssh-keygen",
+        ["-lf", &pub_path.to_string_lossy()].iter(),
+    )
+    .ok()?;
     if out.status != Some(0) {
         return None;
     }
@@ -118,7 +123,12 @@ fn public_key_type(path: &Path) -> Option<String> {
     let token = first.split_whitespace().next()?;
     if matches!(
         token,
-        "ssh-ed25519" | "ssh-rsa" | "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "sk-ssh-ed25519@openssh.com" | "sk-ecdsa-sha2-nistp256@openssh.com"
+        "ssh-ed25519"
+            | "ssh-rsa"
+            | "ecdsa-sha2-nistp256"
+            | "ecdsa-sha2-nistp384"
+            | "sk-ssh-ed25519@openssh.com"
+            | "sk-ecdsa-sha2-nistp256@openssh.com"
     ) {
         Some(token.to_string())
     } else {
@@ -144,7 +154,8 @@ pub fn collect_credentials(
 ) -> CredentialInventory {
     let mut inv = CredentialInventory::default();
     let Some(home) = home else {
-        inv.warnings.push("no home directory; credential discovery skipped".into());
+        inv.warnings
+            .push("no home directory; credential discovery skipped".into());
         return inv;
     };
 
@@ -153,7 +164,7 @@ pub fn collect_credentials(
     let ssh_config = ssh.join("config");
     if ssh_config.is_file() {
         let mode = octal_mode(&ssh_config);
-        let mut rec = CredentialRecord {
+        let rec = CredentialRecord {
             path: ssh_config.to_string_lossy().into_owned(),
             kind: CredentialKind::SshConfig,
             exists: true,
@@ -168,7 +179,8 @@ pub fn collect_credentials(
         // Overly broad permissions on ssh/config weaken the whole setup.
         if let Some(m) = &mode {
             if m != "0600" && m != "0644" && m != "0400" {
-                inv.warnings.push(format!("{} has unusual permissions ({m})", rec.path));
+                inv.warnings
+                    .push(format!("{} has unusual permissions ({m})", rec.path));
             }
         }
         inv.credentials.push(rec);
@@ -268,11 +280,25 @@ pub fn collect_credentials(
     }
 
     // Git credential helper: helper NAME only (never contents).
-    if let Ok(out) = governed_run(governor, runner, "git", ["config", "--global", "credential.helper"].iter()) {
+    if let Ok(out) = governed_run(
+        governor,
+        runner,
+        "git",
+        ["config", "--global", "credential.helper"].iter(),
+    ) {
         if out.status == Some(0) {
             if let Some(helper) = out.stdout.lines().next().and_then(|l| {
-                let c: String = l.trim().chars().filter(|c| !c.is_control()).take(128).collect();
-                if c.is_empty() { None } else { Some(c) }
+                let c: String = l
+                    .trim()
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(128)
+                    .collect();
+                if c.is_empty() {
+                    None
+                } else {
+                    Some(c)
+                }
             }) {
                 inv.credentials.push(CredentialRecord {
                     path: "git:credential.helper".into(),
@@ -292,15 +318,38 @@ pub fn collect_credentials(
 
     // Secret-bearing existence-only records (content never read).
     let secret_paths: &[(&str, CredentialKind, &str)] = &[
-        (".config/gh/hosts.yml", CredentialKind::GhHosts, "GitHub CLI hosts file exists; tokens never read"),
-        (".aws/credentials", CredentialKind::AwsCredentials, "AWS credentials file exists; keys never read"),
-        (".aws/config", CredentialKind::AwsConfig, "AWS config exists; metadata only"),
-        (".config/gcloud", CredentialKind::GcloudConfig, "gcloud config dir exists; tokens never read"),
-        (".azure", CredentialKind::AzureConfig, "azure config dir exists; tokens never read"),
+        (
+            ".config/gh/hosts.yml",
+            CredentialKind::GhHosts,
+            "GitHub CLI hosts file exists; tokens never read",
+        ),
+        (
+            ".aws/credentials",
+            CredentialKind::AwsCredentials,
+            "AWS credentials file exists; keys never read",
+        ),
+        (
+            ".aws/config",
+            CredentialKind::AwsConfig,
+            "AWS config exists; metadata only",
+        ),
+        (
+            ".config/gcloud",
+            CredentialKind::GcloudConfig,
+            "gcloud config dir exists; tokens never read",
+        ),
+        (
+            ".azure",
+            CredentialKind::AzureConfig,
+            "azure config dir exists; tokens never read",
+        ),
     ];
     for (rel, kind, reason) in secret_paths {
         let p: PathBuf = home.join(rel);
-        let exists = if matches!(kind, CredentialKind::GcloudConfig | CredentialKind::AzureConfig) {
+        let exists = if matches!(
+            kind,
+            CredentialKind::GcloudConfig | CredentialKind::AzureConfig
+        ) {
             p.is_dir()
         } else {
             p.is_file()

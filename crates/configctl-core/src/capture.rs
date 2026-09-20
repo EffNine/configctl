@@ -168,8 +168,11 @@ pub fn run_capture(
                     // and generated/cache content are vetoed even for
                     // allowlisted names. Everything else is captured with
                     // its classification recorded as provenance.
-                    let class =
-                        crate::classify::classify_file(&abs, crate::classify::FileKind::Regular, false);
+                    let class = crate::classify::classify_file(
+                        &abs,
+                        crate::classify::FileKind::Regular,
+                        false,
+                    );
                     match class.class {
                         crate::classify::ResourceClass::Secret
                         | crate::classify::ResourceClass::Credential
@@ -298,20 +301,24 @@ pub fn run_capture(
                 excluded.push(format!("environment.{}: invalid variable name", g.name));
                 continue;
             }
-            let policy = crate::capture_policy::decide_global_env(match g.classification.as_str() {
-                "secret" => crate::classify::EnvClass::Secret,
-                "public_config" => crate::classify::EnvClass::PublicConfig,
-                "path" => crate::classify::EnvClass::Path,
-                "machine_specific" => crate::classify::EnvClass::MachineSpecific,
-                "runtime" => crate::classify::EnvClass::Runtime,
-                _ => crate::classify::EnvClass::Unknown,
-            });
+            let policy =
+                crate::capture_policy::decide_global_env(match g.classification.as_str() {
+                    "secret" => crate::classify::EnvClass::Secret,
+                    "public_config" => crate::classify::EnvClass::PublicConfig,
+                    "path" => crate::classify::EnvClass::Path,
+                    "machine_specific" => crate::classify::EnvClass::MachineSpecific,
+                    "runtime" => crate::classify::EnvClass::Runtime,
+                    _ => crate::classify::EnvClass::Unknown,
+                });
             match policy.action {
                 crate::classify::CaptureAction::Reference => {
                     let secret_ref =
                         format!("secret://{}/{}/{}", opts.profile_name, "global", g.name);
                     if crate::paths::validate_secret_ref(&secret_ref).is_err() {
-                        excluded.push(format!("environment.{}: unrepresentable secret ref", g.name));
+                        excluded.push(format!(
+                            "environment.{}: unrepresentable secret ref",
+                            g.name
+                        ));
                         continue;
                     }
                     manifest.secrets.push(crate::profile::SecretEntry {
@@ -333,10 +340,8 @@ pub fn run_capture(
                 }
                 crate::classify::CaptureAction::Capture => {
                     if let Some(v) = &g.value {
-                        environment_literals.insert(
-                            g.name.clone(),
-                            crate::profile::EnvLiteral::Value(v.clone()),
-                        );
+                        environment_literals
+                            .insert(g.name.clone(), crate::profile::EnvLiteral::Value(v.clone()));
                     } else {
                         excluded.push(format!("environment.{}: {}", g.name, policy.reason));
                     }
@@ -551,15 +556,20 @@ pub fn run_capture(
             .or_default()
             .push(name.clone());
     }
-    let toolchains: Vec<ToolchainEntry> = scan
-        .toolchains
-        .iter()
-        .map(|t| ToolchainEntry {
-            name: t.name.clone(),
-            version: t.version.clone(),
-            provenance: Some(t.provenance.clone()),
-        })
-        .collect();
+    let toolchains: Vec<ToolchainEntry> = {
+        // Dedupe by name (first wins); adapters should already fold
+        // multi-PATH duplicates, but the profile rejects them fail-closed.
+        let mut seen = BTreeMap::new();
+        for t in &scan.toolchains {
+            seen.entry(t.name.clone())
+                .or_insert_with(|| ToolchainEntry {
+                    name: t.name.clone(),
+                    version: t.version.clone(),
+                    provenance: Some(t.provenance.clone()),
+                });
+        }
+        seen.into_values().collect()
+    };
     let directories: Vec<DirectoryEntry> = projects
         .iter()
         .map(|p| DirectoryEntry {
@@ -578,15 +588,18 @@ pub fn run_capture(
             pseudo: m.pseudo,
         })
         .collect();
-    let executables: Vec<ExecutableEntry> = scan
-        .executables
-        .iter()
-        .map(|e| ExecutableEntry {
-            name: e.name.clone(),
-            provenance: e.provenance.clone(),
-            version: e.version.clone(),
-        })
-        .collect();
+    let executables: Vec<ExecutableEntry> = {
+        let mut seen = BTreeMap::new();
+        for e in &scan.executables {
+            seen.entry(e.name.clone())
+                .or_insert_with(|| ExecutableEntry {
+                    name: e.name.clone(),
+                    provenance: e.provenance.clone(),
+                    version: e.version.clone(),
+                });
+        }
+        seen.into_values().collect()
+    };
 
     // --- Lock file (record-and-report) ---
     let mut lock_apt: BTreeMap<String, String> = BTreeMap::new();
@@ -702,10 +715,14 @@ pub fn run_capture(
             // section: payloads, secret references, observed metadata.
             let mut decisions = Vec::new();
             for _ in &payloads {
-                decisions.push(crate::capture_policy::CaptureDecision::capture("file payload"));
+                decisions.push(crate::capture_policy::CaptureDecision::capture(
+                    "file payload",
+                ));
             }
             for _ in 0..file_secret_excluded {
-                decisions.push(crate::capture_policy::CaptureDecision::reference("secret file"));
+                decisions.push(crate::capture_policy::CaptureDecision::reference(
+                    "secret file",
+                ));
             }
             for _ in &profile.services {
                 decisions.push(crate::capture_policy::CaptureDecision::observe("service"));
@@ -715,14 +732,18 @@ pub fn run_capture(
             }
             for names in profile.packages.other.values() {
                 for _ in names {
-                    decisions.push(crate::capture_policy::CaptureDecision::capture("package name"));
+                    decisions.push(crate::capture_policy::CaptureDecision::capture(
+                        "package name",
+                    ));
                 }
             }
             for _ in &profile.toolchains {
                 decisions.push(crate::capture_policy::CaptureDecision::capture("toolchain"));
             }
             for _ in &profile.executables {
-                decisions.push(crate::capture_policy::CaptureDecision::observe("executable"));
+                decisions.push(crate::capture_policy::CaptureDecision::observe(
+                    "executable",
+                ));
             }
             if let Some(env) = &profile.environment {
                 for lit in env.values() {
@@ -997,6 +1018,10 @@ pub struct ScanViewAdapter {
 pub mod configctl_discovery_stub {
     //! Adapter types mirroring the redaction-safe fields of the P1 scan.
 
+    /// project name → (markers, role counts).
+    pub type ProjectDetailMap =
+        std::collections::BTreeMap<String, (Vec<String>, Vec<(String, u64)>)>;
+
     #[derive(Debug, Clone, Default)]
     pub struct ScanView {
         pub projects: Vec<ProjectView>,
@@ -1015,7 +1040,7 @@ pub mod configctl_discovery_stub {
         pub mounts: Vec<MountView>,
         pub executables: Vec<ExecutableView>,
         /// project name → (markers, role counts).
-        pub project_detail: std::collections::BTreeMap<String, (Vec<String>, Vec<(String, u64)>)>,
+        pub project_detail: ProjectDetailMap,
         /// v1.1 systemd units to consider for emission.
         pub services: Vec<ServiceView>,
         /// v1.1 global environment to consider for emission.

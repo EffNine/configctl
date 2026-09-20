@@ -389,8 +389,12 @@ fn main() -> ExitCode {
                     if *json {
                         println!(
                             "{}",
-                            configctl_cli::render::Envelope::error("scan", &e, "check resource flags")
-                                .to_json()
+                            configctl_cli::render::Envelope::error(
+                                "scan",
+                                &e,
+                                "check resource flags"
+                            )
+                            .to_json()
                         );
                     } else {
                         eprintln!("error: {e}");

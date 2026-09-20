@@ -261,6 +261,17 @@ pub fn verify(loaded: &LoadedProfile, observed: &ObservedState) -> VerifyReport 
     let mut services = profile.services.clone();
     services.sort_by(|a, b| a.name.cmp(&b.name));
     for s in &services {
+        // v1.1: system-scope units verify as privileged context, never as
+        // user-manager state.
+        if s.scope.as_deref() == Some("system") {
+            results.push(check(
+                "service",
+                &s.name,
+                CheckStatus::Unsupported,
+                "system scope (privileged; recorded only)",
+            ));
+            continue;
+        }
         if observed.services_unavailable {
             results.push(check(
                 "service",

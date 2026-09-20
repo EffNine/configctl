@@ -6,7 +6,7 @@
 //! recording provenance. Content semantics are unchanged (all v2 additions
 //! are defaulted sections).
 
-use crate::profile::{ProvenanceSection, Profile, SCHEMA_VERSION, SCHEMA_VERSION_V1};
+use crate::profile::{Profile, ProvenanceSection, SCHEMA_VERSION, SCHEMA_VERSION_V1};
 
 /// Migrate an in-memory profile to schema v2.
 ///

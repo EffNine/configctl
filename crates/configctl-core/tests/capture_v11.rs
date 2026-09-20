@@ -109,9 +109,17 @@ fn v11_capture_emits_services_env_lock() {
 
     // Services: user reproduced, system privileged — both explicit.
     assert_eq!(p.services.len(), 2);
-    let user = p.services.iter().find(|s| s.name == "syncthing.service").unwrap();
+    let user = p
+        .services
+        .iter()
+        .find(|s| s.name == "syncthing.service")
+        .unwrap();
     assert_eq!(user.scope.as_deref(), Some("user"));
-    let system = p.services.iter().find(|s| s.name == "docker.service").unwrap();
+    let system = p
+        .services
+        .iter()
+        .find(|s| s.name == "docker.service")
+        .unwrap();
     assert_eq!(system.scope.as_deref(), Some("system"));
     assert_eq!(system.classification.as_deref(), Some("privileged"));
 
@@ -129,7 +137,11 @@ fn v11_capture_emits_services_env_lock() {
         _ => panic!("expected secret reference"),
     }
     assert!(!env.contains_key("MYSTERY_VAR"));
-    assert!(result.summary.unknown.iter().any(|u| u.contains("MYSTERY_VAR")));
+    assert!(result
+        .summary
+        .unknown
+        .iter()
+        .any(|u| u.contains("MYSTERY_VAR")));
     // Manifest carries the global secret (project None, source environment).
     let entry = result
         .manifest
@@ -142,17 +154,49 @@ fn v11_capture_emits_services_env_lock() {
 
     // Lock records other-manager versions; profile names them.
     assert_eq!(
-        result.lock.other.get("cargo").and_then(|m| m.get("ripgrep")).map(|s| s.as_str()),
+        result
+            .lock
+            .other
+            .get("cargo")
+            .and_then(|m| m.get("ripgrep"))
+            .map(|s| s.as_str()),
         Some("14.1.0")
     );
-    assert!(p.packages.other.get("cargo").map(|v| v.contains(&"ripgrep".to_string())).unwrap_or(false));
+    assert!(p
+        .packages
+        .other
+        .get("cargo")
+        .map(|v| v.contains(&"ripgrep".to_string()))
+        .unwrap_or(false));
 
     // Machine + hardware + mounts + toolchains present.
-    assert_eq!(p.machine.as_ref().and_then(|m| m.boot_mode.clone()).as_deref(), Some("uefi"));
+    assert_eq!(
+        p.machine
+            .as_ref()
+            .and_then(|m| m.boot_mode.clone())
+            .as_deref(),
+        Some("uefi")
+    );
     assert_eq!(p.mounts.len(), 1);
     assert_eq!(p.toolchains.len(), 1);
-    assert!(result.summary.capture_actions.get("capture").copied().unwrap_or(0) >= 1);
-    assert!(result.summary.capture_actions.get("reference").copied().unwrap_or(0) >= 1);
+    assert!(
+        result
+            .summary
+            .capture_actions
+            .get("capture")
+            .copied()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(
+        result
+            .summary
+            .capture_actions
+            .get("reference")
+            .copied()
+            .unwrap_or(0)
+            >= 1
+    );
     assert!(p.validate().is_empty());
     assert!(result.manifest.validate().is_empty());
 }
@@ -195,8 +239,12 @@ fn system_service_ops_are_privileged_user_ops_safe() {
             },
         );
     }
-    let profile_hash =
-        configctl_core::profile_load::compute_profile_hash(&p, &None, &BTreeMap::new(), &BTreeMap::new());
+    let profile_hash = configctl_core::profile_load::compute_profile_hash(
+        &p,
+        &None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
     let loaded = configctl_core::profile_load::LoadedProfile {
         dir: std::path::PathBuf::from("/tmp/fake"),
         identity: p.name.clone(),
@@ -208,10 +256,24 @@ fn system_service_ops_are_privileged_user_ops_safe() {
         profile_hash,
     };
     let plan = plan::build_plan(&loaded, &st, &BTreeSet::new(), "p1", 1000);
-    let app = plan.operations.iter().find(|o| o.target == "app.service").expect("user op");
-    assert_eq!(app.action_class, configctl_core::classify::PlanActionClass::SafeReproduce);
-    let db = plan.operations.iter().find(|o| o.target == "db.service").expect("system op");
-    assert_eq!(db.action_class, configctl_core::classify::PlanActionClass::Privileged);
+    let app = plan
+        .operations
+        .iter()
+        .find(|o| o.target == "app.service")
+        .expect("user op");
+    assert_eq!(
+        app.action_class,
+        configctl_core::classify::PlanActionClass::SafeReproduce
+    );
+    let db = plan
+        .operations
+        .iter()
+        .find(|o| o.target == "db.service")
+        .expect("system op");
+    assert_eq!(
+        db.action_class,
+        configctl_core::classify::PlanActionClass::Privileged
+    );
     // Plan hash covers classes (stable across identical builds).
     let plan2 = plan::build_plan(&loaded, &st, &BTreeSet::new(), "p1", 1000);
     assert_eq!(plan.plan_hash, plan2.plan_hash);

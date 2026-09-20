@@ -2,8 +2,8 @@
 
 use configctl_core::command::FakeCommandRunner;
 use configctl_core::governor::GovernorBudgets;
-use configctl_discovery::filesystem::{ProjectFileRole, categorize_dotfile, classify_project_file};
-use configctl_discovery::mounts::{MountDecision, MountRecord, collect, decide};
+use configctl_discovery::filesystem::{categorize_dotfile, classify_project_file, ProjectFileRole};
+use configctl_discovery::mounts::{collect, decide, MountDecision, MountRecord};
 use configctl_discovery::scanner::{ScanOptions, Scanner};
 use std::path::Path;
 
@@ -30,11 +30,23 @@ fn dotfiles_discovered_broadly_with_categories() {
     let result = scan_fixture(tmp.path());
     // Dotfiles by filename: .bashrc, .zshrc, .mystery-tool-rc
     // (.config is a dot-dir; init.lua inside it is not itself a dotfile).
-    assert!(result.filesystem.dotfiles_found >= 3, "{:?}", result.filesystem.dotfiles_found);
-    let cats: Vec<&str> = result.dotfiles.iter().map(|d| d.category.as_str()).collect();
+    assert!(
+        result.filesystem.dotfiles_found >= 3,
+        "{:?}",
+        result.filesystem.dotfiles_found
+    );
+    let cats: Vec<&str> = result
+        .dotfiles
+        .iter()
+        .map(|d| d.category.as_str())
+        .collect();
     assert!(cats.contains(&"shell"));
     // Unknown dotfiles are still mapped, never dropped.
-    let mystery = result.dotfiles.iter().find(|d| d.name == ".mystery-tool-rc").expect("mapped");
+    let mystery = result
+        .dotfiles
+        .iter()
+        .find(|d| d.name == ".mystery-tool-rc")
+        .expect("mapped");
     assert_eq!(mystery.category, "unknown");
     assert!(!mystery.reason.is_empty());
     assert_eq!(categorize_dotfile(".bashrc"), "shell");
@@ -82,7 +94,10 @@ fn weak_markers_do_not_declare_projects() {
     std::fs::write(tmp.path().join(".nvmrc"), "20\n").unwrap();
     std::fs::write(tmp.path().join(".editorconfig"), "root = true\n").unwrap();
     let result = scan_fixture(tmp.path());
-    assert!(result.projects.is_empty(), "config-only dir is not a project");
+    assert!(
+        result.projects.is_empty(),
+        "config-only dir is not a project"
+    );
     // …but the files are still mapped as dotfiles.
     assert!(result.filesystem.dotfiles_found >= 2);
 }
@@ -108,7 +123,11 @@ fn symlinks_mapped_with_targets_in_scan() {
     assert!(link.target.ends_with("real.txt"));
     // Cycle recorded with explicit flag.
     assert!(
-        result.filesystem.symlinks.iter().any(|s| s.cycle == Some(true)),
+        result
+            .filesystem
+            .symlinks
+            .iter()
+            .any(|s| s.cycle == Some(true)),
         "cycle must be flagged"
     );
     assert!(result.statistics.symlinks_found >= 3);
@@ -151,7 +170,10 @@ fn budget_exhaustion_reports_partial_completeness() {
     let opts = ScanOptions {
         roots: vec![tmp.path().to_path_buf()],
         limits: Default::default(),
-        governor: GovernorBudgets { max_file_count: 5, ..GovernorBudgets::default() },
+        governor: GovernorBudgets {
+            max_file_count: 5,
+            ..GovernorBudgets::default()
+        },
     };
     let result = scanner.scan(&opts, &runner);
     assert_eq!(

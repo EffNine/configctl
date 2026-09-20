@@ -82,6 +82,17 @@ configctl scan [PATH...] [--root <PATH>]... [--depth <N>]
                [--max-file-bytes <N>] [--json]
 ```
 
+v1.1 resource-control flags (all also on `capture`; hardcore is the
+default — there is no `--hardcore` flag):
+
+```
+--workers <N> --max-time <DURATION> --max-files <N> --max-bytes <BYTES>
+--max-memory <BYTES> --follow-mounts --scan-network
+```
+
+Every override passes through hard sanity ceilings; the scan report ends
+with a governor footer and a completeness block (`COMPLETE`/`PARTIAL`).
+
 Read-only discovery. Positional paths define scan roots; `--root` appends to
 configured roots. With no roots from CLI or config, exits 2 with guidance.
 Never modifies, never prints secret values.

@@ -3,9 +3,11 @@
 //! Read-only. Subprocess probes go through `CommandRunner`. Nothing is
 //! installed and PATH is never modified.
 
-use configctl_core::command::{CommandRequest, CommandRunner};
+use configctl_core::command::{CommandError, CommandRunner};
+use configctl_core::governor::ResourceGovernor;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Tool availability result.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -35,7 +37,12 @@ impl SystemInfo {
 }
 
 /// Collect system metadata. `cwd` is a scratch dir (used as subprocess cwd).
-pub fn collect(runner: &dyn CommandRunner, cwd: &Path) -> SystemInfo {
+/// Tool probes run through the governor like every other subprocess.
+pub fn collect(
+    governor: &Arc<ResourceGovernor>,
+    runner: &dyn CommandRunner,
+    cwd: &Path,
+) -> SystemInfo {
     let mut info = SystemInfo {
         os: "linux".into(),
         arch: std::env::consts::ARCH.to_string(),
@@ -61,11 +68,16 @@ pub fn collect(runner: &dyn CommandRunner, cwd: &Path) -> SystemInfo {
 
     let mut found: BTreeSet<String> = BTreeSet::new();
     for (tool, version_args) in &tools {
-        let program: &str = tool;
-        let req = CommandRequest::new(program, version_args)
-            .cwd(cwd)
-            .output_cap(4096);
-        match runner.run(&req) {
+        let mut req = governor.subprocess_request(*tool, version_args.iter().copied());
+        req.cwd = Some(cwd.to_path_buf());
+        req.output_cap = Some(4096);
+        // Governor spawn slot first (fail-closed on budget exhaustion).
+        let _slot = governor.acquire_subprocess();
+        let out = match _slot {
+            Some(_) => runner.run(&req),
+            None => Err(CommandError::SpawnFailed),
+        };
+        match out {
             Ok(out) if out.status == Some(0) => {
                 let version = out
                     .stdout

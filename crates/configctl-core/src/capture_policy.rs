@@ -63,9 +63,9 @@ pub fn decide_home_file(class: ResourceClass) -> CaptureDecision {
         ResourceClass::MachineSpecific => {
             CaptureDecision::observe("machine-specific content observed, not reproduced")
         }
-        ResourceClass::Privileged => {
-            CaptureDecision::observe("privileged content observed, not reproduced without privilege")
-        }
+        ResourceClass::Privileged => CaptureDecision::observe(
+            "privileged content observed, not reproduced without privilege",
+        ),
         ResourceClass::Dependency | ResourceClass::Unsupported => {
             CaptureDecision::observe("dependency/unsupported content observed as metadata")
         }
@@ -107,10 +107,16 @@ pub fn decide_service(user_scope: bool) -> (CaptureDecision, PlanActionClass) {
 /// Decide a global environment variable for profile emission.
 pub fn decide_global_env(class: EnvClass) -> CaptureDecision {
     match class {
-        EnvClass::Secret => CaptureDecision::reference("secret value never stored; backend reference only"),
+        EnvClass::Secret => {
+            CaptureDecision::reference("secret value never stored; backend reference only")
+        }
         EnvClass::PublicConfig => CaptureDecision::capture("public configuration literal"),
-        EnvClass::Path => CaptureDecision::observe("PATH-like variable mapped (entries/order recorded at scan); value not reproduced"),
-        EnvClass::MachineSpecific => CaptureDecision::observe("machine-specific variable observed, not reproduced"),
+        EnvClass::Path => CaptureDecision::observe(
+            "PATH-like variable mapped (entries/order recorded at scan); value not reproduced",
+        ),
+        EnvClass::MachineSpecific => {
+            CaptureDecision::observe("machine-specific variable observed, not reproduced")
+        }
         EnvClass::Runtime => CaptureDecision::exclude("runtime-ephemeral variable excluded"),
         EnvClass::Unknown => CaptureDecision::observe("unknown variable mapped by name only"),
     }
@@ -166,9 +172,15 @@ mod policy_tests {
             assert!(!d.reason.is_empty(), "{c:?}");
         }
         // Secrets are never captured.
-        assert_eq!(decide_home_file(ResourceClass::Secret).action, CaptureAction::Reference);
+        assert_eq!(
+            decide_home_file(ResourceClass::Secret).action,
+            CaptureAction::Reference
+        );
         // Unknown is preserved, not dropped.
-        assert_eq!(decide_home_file(ResourceClass::Unknown).action, CaptureAction::Observe);
+        assert_eq!(
+            decide_home_file(ResourceClass::Unknown).action,
+            CaptureAction::Observe
+        );
     }
 
     #[test]

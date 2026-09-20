@@ -41,9 +41,13 @@ fixed argv — never a shell.
 
 | Area | Source | Output |
 |---|---|---|
-| Packages | `dpkg-query -W` intersected with the tooling allowlist | `[packages].apt` + `packages.lock.toml` |
-| Home dotfiles | `$HOME` allowlist (`HOME_ALLOWLIST`) passing all safety checks | `[[files]]` + `files/home/*` payloads |
-| Project metadata | P1 `projects` + env/config associations | `[[projects]]` (portable paths, ecosystems, env/config basenames) |
+| Packages | `dpkg-query -W` intersected with the tooling allowlist (+ all other managers recorded by name) | `[packages].apt` + `[packages].other` + `packages.lock.toml` (apt + per-manager versions) |
+| Home dotfiles | `$HOME` candidates (`HOME_ALLOWLIST`: shell, editor, terminal, toolchain configs) passing safety + classification veto | `[[files]]` + `files/home/*` payloads (with `origin`/`detected_by`/`classification` provenance) |
+| Project metadata | P1 `projects` + env/config associations + content roles | `[[projects]]` (portable paths, ecosystems, env/config basenames, markers, role counts) + `[[directories]]` |
+| Toolchains/executables | version-probed executables (registry-gated) | `[toolchains]` + `[executables]` (name, version, provenance) |
+| Services | systemd user (reproduced) + system (privileged) units | `[[services]]` (name, enabled, scope, classification) |
+| Global environment | process env by-name classification | `[environment]` (safe literals + `secret://` refs) |
+| Machine/hardware/mounts | scan inventory (informational) | `[machine]`, `[hardware]`, `[[mounts]]`, `[provenance]` |
 | Environment schemas | P1 `env_files` + re-parsed in-memory values (never persisted) | `env/<project>.toml` |
 | Secrets | P1 classifications (`secret`/`likely_secret`) | `secrets.manifest.toml` (refs only) |
 | Git metadata | `git config --global --list` allowlist | `[git]` (names, emails, helper metadata, aliases) |
@@ -79,10 +83,14 @@ recorded in profile metadata.
 
 ### File selection policy
 
-- Home payloads: exactly the `HOME_ALLOWLIST` names (`.gitconfig`,
-  `.gitignore`, `.editorconfig`, `.tool-versions`, `.nvmrc`, `.node-version`,
+- Home payloads: the `HOME_ALLOWLIST` candidates (shell: `.bashrc`,
+  `.bash_profile`, `.profile`, `.zshrc`, `.zprofile`, `.zshenv`; terminal:
+  `.tmux.conf`, `.inputrc`, `.wgetrc`, `.curlrc`; editor: `.vimrc`,
+  `.gvimrc`, `.ideavimrc`, `.editorconfig`; git/toolchain: `.gitconfig`,
+  `.gitignore`, `.tool-versions`, `.nvmrc`, `.node-version`,
   `.python-version`, `.rust-toolchain[.toml]`). Each must additionally pass
-  symlink/type/size/root/secret checks.
+  symlink/type/size/root/secret checks plus the classification veto
+  (secret/credential/generated/cache refused with reason).
 - Project-local files: only P1-registry names are considered, and they are
   recorded as metadata (basenames in `[[projects]]`), never copied as
   payloads. Build outputs (`.git/objects`, `node_modules/`, `target/`,

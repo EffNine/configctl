@@ -5,15 +5,27 @@
 //! entry decomposition (ordering, duplicates, missing entries), and a tight
 //! allowlist of display-safe names keeps a truncated value for context.
 
-use configctl_core::classify::{EnvClass, classify_env_var};
+use configctl_core::classify::{classify_env_var, EnvClass};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Names whose values are display-safe by construction (fixed locale/tool
 /// output tokens, never credentials). Values still truncated to 128 chars.
 const SAFE_VALUE_NAMES: &[&str] = &[
-    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "EDITOR", "VISUAL", "PAGER", "TERM",
-    "CI", "CONTINUOUS_INTEGRATION", "NO_COLOR", "CLICOLOR", "RUST_BACKTRACE",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TZ",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "TERM",
+    "CI",
+    "CONTINUOUS_INTEGRATION",
+    "NO_COLOR",
+    "CLICOLOR",
+    "RUST_BACKTRACE",
 ];
 
 /// Variables decomposed into path entries instead of stored raw.
@@ -58,7 +70,11 @@ pub fn analyze_path_value(raw: &str, home: Option<&str>) -> PathAnalysis {
         if entries.len() >= 256 {
             break;
         }
-        let clean: String = entry.chars().filter(|c| !c.is_control()).take(512).collect();
+        let clean: String = entry
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(512)
+            .collect();
         if clean.is_empty() || clean.len() > 512 {
             continue;
         }
@@ -135,7 +151,13 @@ pub fn collect_environment() -> EnvironmentInventory {
             inv.secrets += 1;
         }
         let value_opt = if SAFE_VALUE_NAMES.contains(&name.as_str()) {
-            Some(value.chars().filter(|c| !c.is_control()).take(128).collect())
+            Some(
+                value
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(128)
+                    .collect(),
+            )
         } else {
             None
         };

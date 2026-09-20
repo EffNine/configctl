@@ -161,7 +161,10 @@ impl BoundedWalker {
         };
 
         // Device boundary baseline for mount-aware scanning (0 = unknown).
-        let root_dev = std::fs::symlink_metadata(root).ok().map(|m| meta_dev(&m)).unwrap_or(0);
+        let root_dev = std::fs::symlink_metadata(root)
+            .ok()
+            .map(|m| meta_dev(&m))
+            .unwrap_or(0);
         let stay_on_fs = self
             .governor
             .as_ref()

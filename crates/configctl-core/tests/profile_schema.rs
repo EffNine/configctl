@@ -1,7 +1,7 @@
 //! v1.1 profile schema tests: v1 compatibility, migration, v2 round-trip.
 
 use configctl_core::profile::{
-    Profile, SCHEMA_VERSION, SCHEMA_VERSION_V1, is_supported_schema_version,
+    is_supported_schema_version, Profile, SCHEMA_VERSION, SCHEMA_VERSION_V1,
 };
 
 const V1_PROFILE: &str = r#"
@@ -51,8 +51,7 @@ fn supported_versions_are_exactly_1_and_2() {
 #[test]
 fn migrate_v1_to_v2_preserves_content() {
     let mut p = Profile::from_toml(V1_PROFILE).expect("v1 must parse");
-    let migrated =
-        configctl_core::profile_migrate::migrate_to_v2(&mut p).expect("migration works");
+    let migrated = configctl_core::profile_migrate::migrate_to_v2(&mut p).expect("migration works");
     assert!(migrated);
     assert_eq!(p.schema_version, SCHEMA_VERSION);
     assert_eq!(p.provenance.as_ref().and_then(|x| x.migrated_from), Some(1));
@@ -90,7 +89,9 @@ fn v2_full_profile_round_trips() {
         rocm: Some(false),
         compilers: vec!["gcc (12.3.0)".into()],
     });
-    p.packages.other.insert("cargo".into(), vec!["ripgrep".into(), "bat".into()]);
+    p.packages
+        .other
+        .insert("cargo".into(), vec!["ripgrep".into(), "bat".into()]);
     p.toolchains.push(configctl_core::profile::ToolchainEntry {
         name: "rustc".into(),
         version: Some("1.97.1".into()),
@@ -122,11 +123,12 @@ fn v2_full_profile_round_trips() {
         remote: false,
         pseudo: false,
     });
-    p.executables.push(configctl_core::profile::ExecutableEntry {
-        name: "rg".into(),
-        provenance: "cargo".into(),
-        version: Some("14.1.0".into()),
-    });
+    p.executables
+        .push(configctl_core::profile::ExecutableEntry {
+            name: "rg".into(),
+            provenance: "cargo".into(),
+            version: Some("14.1.0".into()),
+        });
     p.projects.push(configctl_core::profile::ProjectEntry {
         name: "a".into(),
         path: "~/projects/a".into(),
@@ -160,10 +162,11 @@ fn v2_rejects_bad_sections() {
     });
     assert!(!p.validate().is_empty());
     let mut p2 = Profile::new("bad2");
-    p2.directories.push(configctl_core::profile::DirectoryEntry {
-        path: "~/x".into(),
-        kind: "symlink-farm".into(),
-        classification: None,
-    });
+    p2.directories
+        .push(configctl_core::profile::DirectoryEntry {
+            path: "~/x".into(),
+            kind: "symlink-farm".into(),
+            classification: None,
+        });
     assert!(!p2.validate().is_empty());
 }

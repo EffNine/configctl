@@ -2,7 +2,7 @@
 
 use crate::render::Envelope;
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{GovernorBudgets, parse_bytes, parse_duration};
+use configctl_core::governor::{parse_bytes, parse_duration, GovernorBudgets};
 use configctl_core::limits::Limits;
 use configctl_discovery::scanner::{ScanOptions, ScanResult, Scanner};
 use std::path::{Path, PathBuf};
@@ -238,7 +238,12 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
         out.push_str(&format!(
             "Packages\n  {} observed across {} managers\n\n",
             s.packages_found,
-            result.package_inventory.managers.iter().filter(|m| m.available).count()
+            result
+                .package_inventory
+                .managers
+                .iter()
+                .filter(|m| m.available)
+                .count()
         ));
         out.push_str(&format!(
             "Executables\n  {} discovered on PATH ({} version-probed)\n\n",
@@ -246,7 +251,9 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
         ));
         out.push_str(&format!(
             "Filesystem\n  {} dotfiles, {} symlinks mapped, {} mounts recorded\n\n",
-            s.dotfiles_found, s.symlinks_found, result.mounts.len()
+            s.dotfiles_found,
+            s.symlinks_found,
+            result.mounts.len()
         ));
         out.push_str(&format!(
             "Services\n  {} units (user scope: {}, system scope: {})\n\n",
@@ -261,8 +268,16 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
         out.push_str(&format!(
             "Hardware\n  {} / {} / {} / {} RAM KiB / {} GPU(s)\n\n",
             result.hardware.arch,
-            result.hardware.distro.as_deref().unwrap_or("unknown distro"),
-            result.hardware.kernel.as_deref().unwrap_or("unknown kernel"),
+            result
+                .hardware
+                .distro
+                .as_deref()
+                .unwrap_or("unknown distro"),
+            result
+                .hardware
+                .kernel
+                .as_deref()
+                .unwrap_or("unknown kernel"),
             result.hardware.memory.total_kib,
             result.hardware.gpus.len()
         ));
@@ -329,7 +344,8 @@ fn bool_word(b: bool) -> &'static str {
     }
 }
 
-fn distro_line(system: &configctl_discovery::SystemInfo) -> String {    match &system.distro {
+fn distro_line(system: &configctl_discovery::SystemInfo) -> String {
+    match &system.distro {
         Some(d) => d.clone(),
         None => "Linux".into(),
     }

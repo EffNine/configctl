@@ -37,26 +37,52 @@ impl MountDecision {
 }
 
 const REMOTE_FSTYPES: &[&str] = &[
-    "nfs", "nfs4", "smbfs", "cifs", "smb3", "9p", "afs", "ncpfs", "fuse.sshfs", "sshfs", "glusterfs",
-    "ceph", "lustre",
+    "nfs",
+    "nfs4",
+    "smbfs",
+    "cifs",
+    "smb3",
+    "9p",
+    "afs",
+    "ncpfs",
+    "fuse.sshfs",
+    "sshfs",
+    "glusterfs",
+    "ceph",
+    "lustre",
 ];
 
 const PSEUDO_FSTYPES: &[&str] = &[
-    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2", "debugfs", "tracefs",
-    "securityfs", "configfs", "fusectl", "pstore", "bpf", "autofs", "mqueue", "hugetlbfs", "overlay",
+    "proc",
+    "sysfs",
+    "devtmpfs",
+    "devpts",
+    "tmpfs",
+    "cgroup",
+    "cgroup2",
+    "debugfs",
+    "tracefs",
+    "securityfs",
+    "configfs",
+    "fusectl",
+    "pstore",
+    "bpf",
+    "autofs",
+    "mqueue",
+    "hugetlbfs",
+    "overlay",
     "nsfs",
 ];
 
-/// Note: `overlay` (containers) is listed pseudo because descending from the
-/// host into every container layer mount is a mount explosion by default;
-/// the mount itself is still recorded with its type.
-
+// Note: `overlay` (containers) is listed pseudo because descending from the
+// host into every container layer mount is a mount explosion by default;
+// the mount itself is still recorded with its type.
 pub fn is_remote_fstype(fstype: &str) -> bool {
-    REMOTE_FSTYPES.iter().any(|t| *t == fstype)
+    REMOTE_FSTYPES.contains(&fstype)
 }
 
 pub fn is_pseudo_fstype(fstype: &str) -> bool {
-    PSEUDO_FSTYPES.iter().any(|t| *t == fstype)
+    PSEUDO_FSTYPES.contains(&fstype)
 }
 
 /// Decide traversal for one mount under the given policy flags.

@@ -214,7 +214,9 @@ impl CommandRunner for StdCommandRunner {
 ///
 /// Polls in small slices so the deadline check actually runs; a process that
 /// ignores the deadline is still reported as timed out (`status: None`) even
-/// if the kill did not take effect immediately.
+/// if the kill did not take effect immediately. The post-kill reap is itself
+/// bounded: an unkillable (uninterruptible-sleep) child can never hang the
+/// scanner — it is reported timed-out and left for init to reap.
 fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
     let start = std::time::Instant::now();
     let deadline_poll = timeout / 4;
@@ -226,7 +228,14 @@ fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
                 if start.elapsed() >= last_poll {
                     // Best-effort kill; report timeout honestly.
                     let _ = child.kill();
-                    let _ = child.wait();
+                    // Bounded reap: 2s grace, then give up waiting (never hang).
+                    let reap_start = std::time::Instant::now();
+                    while reap_start.elapsed() < Duration::from_secs(2) {
+                        match child.try_wait() {
+                            Ok(Some(_)) | Err(_) => break,
+                            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                        }
+                    }
                     return None;
                 }
                 if start.elapsed() >= deadline_poll {

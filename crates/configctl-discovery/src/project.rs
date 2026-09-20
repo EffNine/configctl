@@ -95,67 +95,287 @@ pub const MARKERS: &[MarkerDef] = &[
         hint: "elixir",
     },
     // --- v1.1 hardcore extension: VCS roots ---
-    MarkerDef { name: ".hg", is_dir: true, hint: "" },
-    MarkerDef { name: ".svn", is_dir: true, hint: "" },
-    MarkerDef { name: ".jj", is_dir: true, hint: "" },
-    MarkerDef { name: ".gitignore", is_dir: false, hint: "" },
-    MarkerDef { name: ".gitmodules", is_dir: false, hint: "" },
-    MarkerDef { name: ".gitattributes", is_dir: false, hint: "" },
+    MarkerDef {
+        name: ".hg",
+        is_dir: true,
+        hint: "",
+    },
+    MarkerDef {
+        name: ".svn",
+        is_dir: true,
+        hint: "",
+    },
+    MarkerDef {
+        name: ".jj",
+        is_dir: true,
+        hint: "",
+    },
+    MarkerDef {
+        name: ".gitignore",
+        is_dir: false,
+        hint: "",
+    },
+    MarkerDef {
+        name: ".gitmodules",
+        is_dir: false,
+        hint: "",
+    },
+    MarkerDef {
+        name: ".gitattributes",
+        is_dir: false,
+        hint: "",
+    },
     // --- lockfiles ---
-    MarkerDef { name: "Cargo.lock", is_dir: false, hint: "rust" },
-    MarkerDef { name: "package-lock.json", is_dir: false, hint: "javascript" },
-    MarkerDef { name: "pnpm-lock.yaml", is_dir: false, hint: "javascript" },
-    MarkerDef { name: "yarn.lock", is_dir: false, hint: "javascript" },
-    MarkerDef { name: "pnpm-workspace.yaml", is_dir: false, hint: "javascript" },
-    MarkerDef { name: ".nvmrc", is_dir: false, hint: "javascript" },
-    MarkerDef { name: ".node-version", is_dir: false, hint: "javascript" },
-    MarkerDef { name: "uv.lock", is_dir: false, hint: "python" },
-    MarkerDef { name: "poetry.lock", is_dir: false, hint: "python" },
-    MarkerDef { name: "Pdm.lock", is_dir: false, hint: "python" },
-    MarkerDef { name: "setup.py", is_dir: false, hint: "python" },
-    MarkerDef { name: "setup.cfg", is_dir: false, hint: "python" },
-    MarkerDef { name: "tox.ini", is_dir: false, hint: "python" },
-    MarkerDef { name: "go.sum", is_dir: false, hint: "go" },
-    MarkerDef { name: "go.work", is_dir: false, hint: "go" },
-    MarkerDef { name: "Gemfile.lock", is_dir: false, hint: "ruby" },
-    MarkerDef { name: "composer.lock", is_dir: false, hint: "php" },
-    MarkerDef { name: "mix.lock", is_dir: false, hint: "elixir" },
+    MarkerDef {
+        name: "Cargo.lock",
+        is_dir: false,
+        hint: "rust",
+    },
+    MarkerDef {
+        name: "package-lock.json",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: "pnpm-lock.yaml",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: "yarn.lock",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: "pnpm-workspace.yaml",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: ".nvmrc",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: ".node-version",
+        is_dir: false,
+        hint: "javascript",
+    },
+    MarkerDef {
+        name: "uv.lock",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "poetry.lock",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "Pdm.lock",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "setup.py",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "setup.cfg",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "tox.ini",
+        is_dir: false,
+        hint: "python",
+    },
+    MarkerDef {
+        name: "go.sum",
+        is_dir: false,
+        hint: "go",
+    },
+    MarkerDef {
+        name: "go.work",
+        is_dir: false,
+        hint: "go",
+    },
+    MarkerDef {
+        name: "Gemfile.lock",
+        is_dir: false,
+        hint: "ruby",
+    },
+    MarkerDef {
+        name: "composer.lock",
+        is_dir: false,
+        hint: "php",
+    },
+    MarkerDef {
+        name: "mix.lock",
+        is_dir: false,
+        hint: "elixir",
+    },
     // --- build systems / workspace manifests ---
-    MarkerDef { name: "meson.build", is_dir: false, hint: "meson" },
-    MarkerDef { name: "BUILD", is_dir: false, hint: "bazel" },
-    MarkerDef { name: "BUILD.bazel", is_dir: false, hint: "bazel" },
-    MarkerDef { name: "WORKSPACE", is_dir: false, hint: "bazel" },
-    MarkerDef { name: "CMakePresets.json", is_dir: false, hint: "cmake" },
-    MarkerDef { name: "settings.gradle", is_dir: false, hint: "java" },
-    MarkerDef { name: "build.gradle.kts", is_dir: false, hint: "java" },
-    MarkerDef { name: "gradlew", is_dir: false, hint: "java" },
-    MarkerDef { name: ".cargo", is_dir: true, hint: "rust" },
-    MarkerDef { name: "rust-toolchain.toml", is_dir: false, hint: "rust" },
+    MarkerDef {
+        name: "meson.build",
+        is_dir: false,
+        hint: "meson",
+    },
+    MarkerDef {
+        name: "BUILD",
+        is_dir: false,
+        hint: "bazel",
+    },
+    MarkerDef {
+        name: "BUILD.bazel",
+        is_dir: false,
+        hint: "bazel",
+    },
+    MarkerDef {
+        name: "WORKSPACE",
+        is_dir: false,
+        hint: "bazel",
+    },
+    MarkerDef {
+        name: "CMakePresets.json",
+        is_dir: false,
+        hint: "cmake",
+    },
+    MarkerDef {
+        name: "settings.gradle",
+        is_dir: false,
+        hint: "java",
+    },
+    MarkerDef {
+        name: "build.gradle.kts",
+        is_dir: false,
+        hint: "java",
+    },
+    MarkerDef {
+        name: "gradlew",
+        is_dir: false,
+        hint: "java",
+    },
+    MarkerDef {
+        name: ".cargo",
+        is_dir: true,
+        hint: "rust",
+    },
+    MarkerDef {
+        name: "rust-toolchain.toml",
+        is_dir: false,
+        hint: "rust",
+    },
     // --- task runners ---
-    MarkerDef { name: "justfile", is_dir: false, hint: "just" },
-    MarkerDef { name: "Justfile", is_dir: false, hint: "just" },
-    MarkerDef { name: "Taskfile.yml", is_dir: false, hint: "task" },
-    MarkerDef { name: "Taskfile.yaml", is_dir: false, hint: "task" },
-    MarkerDef { name: "Earthfile", is_dir: false, hint: "earthly" },
-    MarkerDef { name: "flake.nix", is_dir: false, hint: "nix" },
-    MarkerDef { name: "devenv.nix", is_dir: false, hint: "nix" },
-    MarkerDef { name: "shell.nix", is_dir: false, hint: "nix" },
-    MarkerDef { name: ".tool-versions", is_dir: false, hint: "mise" },
-    MarkerDef { name: ".envrc", is_dir: false, hint: "direnv" },
+    MarkerDef {
+        name: "justfile",
+        is_dir: false,
+        hint: "just",
+    },
+    MarkerDef {
+        name: "Justfile",
+        is_dir: false,
+        hint: "just",
+    },
+    MarkerDef {
+        name: "Taskfile.yml",
+        is_dir: false,
+        hint: "task",
+    },
+    MarkerDef {
+        name: "Taskfile.yaml",
+        is_dir: false,
+        hint: "task",
+    },
+    MarkerDef {
+        name: "Earthfile",
+        is_dir: false,
+        hint: "earthly",
+    },
+    MarkerDef {
+        name: "flake.nix",
+        is_dir: false,
+        hint: "nix",
+    },
+    MarkerDef {
+        name: "devenv.nix",
+        is_dir: false,
+        hint: "nix",
+    },
+    MarkerDef {
+        name: "shell.nix",
+        is_dir: false,
+        hint: "nix",
+    },
+    MarkerDef {
+        name: ".tool-versions",
+        is_dir: false,
+        hint: "mise",
+    },
+    MarkerDef {
+        name: ".envrc",
+        is_dir: false,
+        hint: "direnv",
+    },
     // --- containers ---
-    MarkerDef { name: "Dockerfile", is_dir: false, hint: "container" },
-    MarkerDef { name: "Containerfile", is_dir: false, hint: "container" },
-    MarkerDef { name: "compose.yaml", is_dir: false, hint: "container" },
-    MarkerDef { name: "compose.yml", is_dir: false, hint: "container" },
-    MarkerDef { name: "docker-compose.yml", is_dir: false, hint: "container" },
-    MarkerDef { name: ".dockerignore", is_dir: false, hint: "container" },
+    MarkerDef {
+        name: "Dockerfile",
+        is_dir: false,
+        hint: "container",
+    },
+    MarkerDef {
+        name: "Containerfile",
+        is_dir: false,
+        hint: "container",
+    },
+    MarkerDef {
+        name: "compose.yaml",
+        is_dir: false,
+        hint: "container",
+    },
+    MarkerDef {
+        name: "compose.yml",
+        is_dir: false,
+        hint: "container",
+    },
+    MarkerDef {
+        name: "docker-compose.yml",
+        is_dir: false,
+        hint: "container",
+    },
+    MarkerDef {
+        name: ".dockerignore",
+        is_dir: false,
+        hint: "container",
+    },
     // --- CI configuration ---
-    MarkerDef { name: ".github", is_dir: true, hint: "ci" },
-    MarkerDef { name: ".gitlab-ci.yml", is_dir: false, hint: "ci" },
-    MarkerDef { name: "Jenkinsfile", is_dir: false, hint: "ci" },
+    MarkerDef {
+        name: ".github",
+        is_dir: true,
+        hint: "ci",
+    },
+    MarkerDef {
+        name: ".gitlab-ci.yml",
+        is_dir: false,
+        hint: "ci",
+    },
+    MarkerDef {
+        name: "Jenkinsfile",
+        is_dir: false,
+        hint: "ci",
+    },
     // --- editor / project configuration ---
-    MarkerDef { name: ".editorconfig", is_dir: false, hint: "editor" },
-    MarkerDef { name: ".vscode", is_dir: true, hint: "editor" },
+    MarkerDef {
+        name: ".editorconfig",
+        is_dir: false,
+        hint: "editor",
+    },
+    MarkerDef {
+        name: ".vscode",
+        is_dir: true,
+        hint: "editor",
+    },
 ];
 
 /// Markers that never declare a project root on their own.
@@ -211,10 +431,7 @@ impl ProjectDetection {
     pub fn confidence(&self) -> &'static str {
         if self.markers_found.iter().any(|m| m == ".git")
             && self.markers_found.iter().any(|m| {
-                m != ".git"
-                    && m != ".gitignore"
-                    && m != ".gitmodules"
-                    && m != ".gitattributes"
+                m != ".git" && m != ".gitignore" && m != ".gitmodules" && m != ".gitattributes"
             })
         {
             "certain"

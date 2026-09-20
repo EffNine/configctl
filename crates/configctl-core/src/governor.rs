@@ -11,7 +11,7 @@
 //! Explicit overrides are always passed through [`GovernorBudgets::sanitize`]
 //! so even user-supplied values have hard sanity ceilings.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -61,7 +61,11 @@ impl Default for GovernorBudgets {
             max_single_file_read: 256 * 1024 * 1024,
             max_recursion_depth: 64,
             max_symlink_depth: 16,
-            max_subprocesses: 64,
+            // Benchmarked (v1.1 bench fixtures + live hosts): a full scan
+            // issues ~70 spawns (10 system + 11 managers + ~40 version
+            // probes + services/credentials/hardware). 256 leaves 3x
+            // headroom while staying firmly bounded.
+            max_subprocesses: 256,
             max_subprocess_runtime: Duration::from_secs(10),
             max_subprocess_output: 1024 * 1024,
             max_memory_bytes: 2 * 1024 * 1024 * 1024,
@@ -75,7 +79,7 @@ impl Default for GovernorBudgets {
 /// Conservative worker default: `min(8, parallelism)`, at least 1.
 pub fn default_workers() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get().min(8).max(1))
+        .map(|n| n.get().clamp(1, 8))
         .unwrap_or(4)
 }
 
@@ -93,18 +97,14 @@ impl GovernorBudgets {
         self.max_total_bytes_read = self
             .max_total_bytes_read
             .clamp(1024 * 1024, 1024 * 1024 * 1024 * 1024);
-        self.max_single_file_read = self
-            .max_single_file_read
-            .clamp(4096, 1024 * 1024 * 1024);
+        self.max_single_file_read = self.max_single_file_read.clamp(4096, 1024 * 1024 * 1024);
         self.max_recursion_depth = self.max_recursion_depth.clamp(1, 256);
         self.max_symlink_depth = self.max_symlink_depth.clamp(1, 64);
-        self.max_subprocesses = self.max_subprocesses.clamp(1, 512);
+        self.max_subprocesses = self.max_subprocesses.clamp(1, 2048);
         self.max_subprocess_runtime = self
             .max_subprocess_runtime
             .clamp(Duration::from_secs(1), Duration::from_secs(120));
-        self.max_subprocess_output = self
-            .max_subprocess_output
-            .clamp(4096, 64 * 1024 * 1024);
+        self.max_subprocess_output = self.max_subprocess_output.clamp(4096, 64 * 1024 * 1024);
         self.max_memory_bytes = self
             .max_memory_bytes
             .clamp(64 * 1024 * 1024, 32 * 1024 * 1024 * 1024);
@@ -113,16 +113,18 @@ impl GovernorBudgets {
 
     /// Bridge from the v1 [`crate::limits::Limits`] model.
     pub fn from_limits(limits: &crate::limits::Limits) -> Self {
-        let mut b = Self::default();
-        b.max_recursion_depth = limits.max_depth.min(256).max(1);
-        b.max_file_count = (limits.max_files_total as u64).clamp(1, 50_000_000);
-        b.max_total_bytes_read = (limits.max_total_bytes as u64).clamp(1024 * 1024, 1024 * 1024 * 1024 * 1024);
-        b.max_single_file_read = (limits.max_file_bytes as u64).clamp(4096, 1024 * 1024 * 1024);
-        b.max_subprocess_output = limits.subprocess_output_cap.clamp(4096, 64 * 1024 * 1024);
-        b.max_subprocess_runtime = limits
-            .subprocess_timeout
-            .clamp(Duration::from_secs(1), Duration::from_secs(120));
-        b
+        Self {
+            max_recursion_depth: limits.max_depth.clamp(1, 256),
+            max_file_count: (limits.max_files_total as u64).clamp(1, 50_000_000),
+            max_total_bytes_read: (limits.max_total_bytes as u64)
+                .clamp(1024 * 1024, 1024 * 1024 * 1024 * 1024),
+            max_single_file_read: (limits.max_file_bytes as u64).clamp(4096, 1024 * 1024 * 1024),
+            max_subprocess_output: limits.subprocess_output_cap.clamp(4096, 64 * 1024 * 1024),
+            max_subprocess_runtime: limits
+                .subprocess_timeout
+                .clamp(Duration::from_secs(1), Duration::from_secs(120)),
+            ..Self::default()
+        }
     }
 }
 
@@ -222,7 +224,6 @@ pub struct ResourceGovernor {
     subprocesses_total: AtomicU64,
     subprocesses_live: AtomicU64,
     limit_hit: Mutex<Option<&'static str>>,
-    disabled: AtomicBool,
 }
 
 impl ResourceGovernor {
@@ -236,7 +237,6 @@ impl ResourceGovernor {
             subprocesses_total: AtomicU64::new(0),
             subprocesses_live: AtomicU64::new(0),
             limit_hit: Mutex::new(None),
-            disabled: AtomicBool::new(false),
         })
     }
 
@@ -272,7 +272,9 @@ impl ResourceGovernor {
             let total = self.bytes_read.fetch_add(content_bytes, Ordering::Relaxed) + content_bytes;
             if total > self.budgets.max_total_bytes_read {
                 self.note_limit("io_budget");
-                return GovernorDecision::LimitReached { reason: "io_budget" };
+                return GovernorDecision::LimitReached {
+                    reason: "io_budget",
+                };
             }
         }
         if self.deadline_exceeded() {
@@ -305,7 +307,9 @@ impl ResourceGovernor {
         let projected = self.bytes_read.load(Ordering::Relaxed) + size;
         if projected > self.budgets.max_total_bytes_read {
             self.note_limit("io_budget");
-            return GovernorDecision::LimitReached { reason: "io_budget" };
+            return GovernorDecision::LimitReached {
+                reason: "io_budget",
+            };
         }
         GovernorDecision::Proceed
     }
@@ -358,8 +362,8 @@ impl ResourceGovernor {
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             subprocesses_total: self.subprocesses_total.load(Ordering::Relaxed),
             limit_hit: self.limit_hit().map(|s| s.to_string()),
-            cpu_pressure: format!("{:?}", cpu_pressure().to_lower()),
-            memory_pressure: format!("{:?}", memory_pressure().to_lower()),
+            cpu_pressure: cpu_pressure().to_lower().to_string(),
+            memory_pressure: memory_pressure().to_lower().to_string(),
         }
     }
 
@@ -503,7 +507,7 @@ mod governor_tests {
         assert!(b.max_wall_time <= Duration::from_secs(120 * 60));
         assert!(b.max_workers <= 32);
         assert!(b.max_file_count <= 50_000_000);
-        assert!(b.max_subprocesses <= 512);
+        assert!(b.max_subprocesses <= 2048);
         assert!(b.max_subprocess_output <= 64 * 1024 * 1024);
     }
 
@@ -517,7 +521,9 @@ mod governor_tests {
         assert_eq!(gov.account_file(0), GovernorDecision::Proceed);
         assert_eq!(
             gov.account_file(0),
-            GovernorDecision::LimitReached { reason: "file_budget" }
+            GovernorDecision::LimitReached {
+                reason: "file_budget"
+            }
         );
         assert_eq!(gov.limit_hit(), Some("file_budget"));
     }

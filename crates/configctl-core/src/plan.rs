@@ -7,10 +7,10 @@
 //! Determinism: operations are sorted by `(provider_rank, target)`; the plan
 //! hash covers only semantic content (never `created_at`/`plan_id`).
 
+use crate::classify::PlanActionClass;
 use crate::observe::ObservedState;
 use crate::profile::EnvLiteral;
 use crate::profile_load::LoadedProfile;
-use crate::classify::PlanActionClass;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -423,6 +423,52 @@ pub fn build_plan(
     let mut services = profile.services.clone();
     services.sort_by(|a, b| a.name.cmp(&b.name));
     for s in &services {
+        // v1.1: system-scope units are recorded, never driven. Known states
+        // resolve to enable/disable intent classified PRIVILEGED (the
+        // refinement pass below; apply refuses them). Unknown states stay
+        // Unsupported with an explicit message.
+        if s.scope.as_deref() == Some("system") {
+            let known_differs = matches!(
+                observed.services.get(&s.name),
+                Some(o) if !o.unknown && s.enabled.is_some() && o.enabled != s.enabled
+            );
+            if known_differs {
+                let want_enabled = s.enabled.unwrap_or(false);
+                operations.push(mk_op(
+                    "systemd",
+                    if want_enabled {
+                        OperationKind::ServiceEnable
+                    } else {
+                        OperationKind::ServiceDisable
+                    },
+                    &s.name,
+                    format!(
+                        "service {}: {} (system scope; requires privilege)",
+                        s.name,
+                        if want_enabled { "enable" } else { "disable" }
+                    ),
+                    "high",
+                    None,
+                    None,
+                    RollbackSupport::Unsupported,
+                ));
+            } else {
+                operations.push(mk_op(
+                    "systemd",
+                    OperationKind::Unsupported,
+                    &s.name,
+                    format!(
+                        "service {}: system scope (privileged; recorded only, apply refuses)",
+                        s.name
+                    ),
+                    "low",
+                    None,
+                    None,
+                    RollbackSupport::Unsupported,
+                ));
+            }
+            continue;
+        }
         if observed.services_unavailable {
             operations.push(mk_op(
                 "systemd",
@@ -573,12 +619,7 @@ pub fn build_plan(
         let scopes: BTreeMap<&str, &str> = profile
             .services
             .iter()
-            .map(|s| {
-                (
-                    s.name.as_str(),
-                    s.scope.as_deref().unwrap_or("user"),
-                )
-            })
+            .map(|s| (s.name.as_str(), s.scope.as_deref().unwrap_or("user")))
             .collect();
         for op in operations.iter_mut() {
             if op.provider == "systemd"

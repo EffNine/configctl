@@ -4,7 +4,7 @@
 //! explicit output directory. `--dry-run` writes nothing.
 
 use crate::commands::scan::{default_roots, expand_root};
-pub use crate::commands::scan::{ScanGovernorFlags, governor_from_flags};
+pub use crate::commands::scan::{governor_from_flags, ScanGovernorFlags};
 use configctl_core::capture::{self, CaptureOptions};
 use configctl_core::command::CommandRunner;
 use configctl_core::limits::Limits;
@@ -350,7 +350,12 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discove
             cpu_model: r.hardware.cpu.model.clone(),
             logical_cpus: Some(r.hardware.cpu.logical_count as u32),
             total_ram_kib: Some(r.hardware.memory.total_kib),
-            gpus: r.hardware.gpus.iter().map(|g| g.description.clone()).collect(),
+            gpus: r
+                .hardware
+                .gpus
+                .iter()
+                .map(|g| g.description.clone())
+                .collect(),
             cuda: Some(r.hardware.accelerators.cuda),
             rocm: Some(r.hardware.accelerators.rocm),
             compilers: r.hardware.compilers.clone(),
@@ -366,18 +371,23 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discove
             v.dedup();
             v
         },
-        toolchains: r
-            .toolchain
-            .executables
-            .iter()
-            .filter(|e| e.version.is_some())
-            .take(128)
-            .map(|e| stub::ToolchainView {
-                name: e.name.clone(),
-                version: e.version.clone(),
-                provenance: e.provenance.clone(),
-            })
-            .collect(),
+        toolchains: {
+            // One entry per tool name (first PATH hit wins — standard PATH
+            // semantics); duplicates across bin dirs are folded, never stored.
+            let mut seen = std::collections::BTreeSet::new();
+            r.toolchain
+                .executables
+                .iter()
+                .filter(|e| e.version.is_some())
+                .filter(|e| seen.insert(e.name.clone()))
+                .take(128)
+                .map(|e| stub::ToolchainView {
+                    name: e.name.clone(),
+                    version: e.version.clone(),
+                    provenance: e.provenance.clone(),
+                })
+                .collect()
+        },
         mounts: r
             .mounts
             .iter()
@@ -390,18 +400,21 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discove
                 pseudo: m.pseudo,
             })
             .collect(),
-        executables: r
-            .toolchain
-            .executables
-            .iter()
-            .filter(|e| e.version.is_some())
-            .take(128)
-            .map(|e| stub::ExecutableView {
-                name: e.name.clone(),
-                version: e.version.clone(),
-                provenance: e.provenance.clone(),
-            })
-            .collect(),
+        executables: {
+            let mut seen = std::collections::BTreeSet::new();
+            r.toolchain
+                .executables
+                .iter()
+                .filter(|e| e.version.is_some())
+                .filter(|e| seen.insert(e.name.clone()))
+                .take(128)
+                .map(|e| stub::ExecutableView {
+                    name: e.name.clone(),
+                    version: e.version.clone(),
+                    provenance: e.provenance.clone(),
+                })
+                .collect()
+        },
         project_detail: r
             .project_contents
             .iter()

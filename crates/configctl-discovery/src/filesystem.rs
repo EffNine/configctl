@@ -91,16 +91,20 @@ impl ProjectFileRole {
 /// Source-code extensions mapped without reading content.
 const SOURCE_EXTS: &[&str] = &[
     "rs", "go", "py", "js", "ts", "tsx", "jsx", "mjs", "cjs", "c", "h", "hpp", "cc", "cpp", "cxx",
-    "java", "kt", "kts", "scala", "rb", "php", "ex", "exs", "erl", "hrl", "hs", "ml", "mli", "swift",
-    "m", "mm", "cs", "fs", "vb", "r", "jl", "lua", "pl", "pm", "sh", "bash", "zsh", "fish", "ps1",
-    "sql", "graphql", "proto", "vue", "svelte", "astro", "dart", "nim", "zig", "v", "adb", "ads",
-    "f90", "f", "for", "pas", "d", "cr", "elm", "purs", "clj", "cljs", "rkt", "scm",
+    "java", "kt", "kts", "scala", "rb", "php", "ex", "exs", "erl", "hrl", "hs", "ml", "mli",
+    "swift", "m", "mm", "cs", "fs", "vb", "r", "jl", "lua", "pl", "pm", "sh", "bash", "zsh",
+    "fish", "ps1", "sql", "graphql", "proto", "vue", "svelte", "astro", "dart", "nim", "zig", "v",
+    "adb", "ads", "f90", "f", "for", "pas", "d", "cr", "elm", "purs", "clj", "cljs", "rkt", "scm",
 ];
 
 const DOC_EXTS: &[&str] = &["md", "markdown", "rst", "txt", "adoc", "org", "tex"];
 
 /// Role of one project-owned file (pure path heuristics + exec bit).
-pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (ProjectFileRole, Vec<String>) {
+pub fn classify_project_file(
+    path: &Path,
+    executable: bool,
+    size: u64,
+) -> (ProjectFileRole, Vec<String>) {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -130,7 +134,10 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
         signals.push("vcs_metadata".to_string());
         return (ProjectFileRole::Dependency, signals);
     }
-    if components.iter().any(|c| c == "vendor" || c == "third_party" || c == "third-party") {
+    if components
+        .iter()
+        .any(|c| c == "vendor" || c == "third_party" || c == "third-party")
+    {
         signals.push("vendored".to_string());
         return (ProjectFileRole::Dependency, signals);
     }
@@ -141,8 +148,12 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
         return (ProjectFileRole::EnvSchema, signals);
     }
     // Secrets by name (core registry: key basenames + extensions).
-    if configctl_core::classify::SECRET_BASENAMES.iter().any(|b| *b == name)
-        || configctl_core::classify::SECRET_EXTENSIONS.iter().any(|e| name.ends_with(e))
+    if configctl_core::classify::SECRET_BASENAMES
+        .iter()
+        .any(|b| *b == name)
+        || configctl_core::classify::SECRET_EXTENSIONS
+            .iter()
+            .any(|e| name.ends_with(e))
         || (name.starts_with("id_") && !name.contains('.'))
     {
         signals.push("secret_name".to_string());
@@ -158,15 +169,25 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
         return (ProjectFileRole::Manifest, signals);
     }
     // CI / containers.
-    if components.iter().any(|c| c == ".github" || c == ".circleci")
-        || matches!(name.as_str(), ".gitlab-ci.yml" | "Jenkinsfile" | "Earthfile")
+    if components
+        .iter()
+        .any(|c| c == ".github" || c == ".circleci")
+        || matches!(
+            name.as_str(),
+            ".gitlab-ci.yml" | "Jenkinsfile" | "Earthfile"
+        )
     {
         signals.push("ci".to_string());
         return (ProjectFileRole::Ci, signals);
     }
     if matches!(
         name.as_str(),
-        "Dockerfile" | "Containerfile" | "compose.yaml" | "compose.yml" | "docker-compose.yml" | ".dockerignore"
+        "Dockerfile"
+            | "Containerfile"
+            | "compose.yaml"
+            | "compose.yml"
+            | "docker-compose.yml"
+            | ".dockerignore"
     ) {
         signals.push("container".to_string());
         return (ProjectFileRole::Container, signals);
@@ -175,8 +196,18 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
     if components.iter().any(|c| {
         matches!(
             c.as_str(),
-            "src" | "lib" | "app" | "pkg" | "cmd" | "internal" | "tests" | "test" | "spec"
-                | "benchmarks" | "benches" | "examples"
+            "src"
+                | "lib"
+                | "app"
+                | "pkg"
+                | "cmd"
+                | "internal"
+                | "tests"
+                | "test"
+                | "spec"
+                | "benchmarks"
+                | "benches"
+                | "examples"
         )
     }) {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -186,17 +217,27 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
             }
         }
     }
-    if components.iter().any(|c| c == "scripts" || c == "script" || c == ".devcontainer") || executable {
-        if executable {
-            signals.push("executable".to_string());
-            return (ProjectFileRole::Script, signals);
-        }
+    // Scripts: executable files (location-independent); non-executable
+    // files under script dirs fall through to extension checks below.
+    if executable {
+        signals.push("executable".to_string());
+        return (ProjectFileRole::Script, signals);
     }
     // Toolchain files.
     if matches!(
         name.as_str(),
-        "Makefile" | "makefile" | "justfile" | "Justfile" | "Taskfile.yml" | "Taskfile.yaml"
-            | "CMakeLists.txt" | "meson.build" | "BUILD" | "BUILD.bazel" | ".tool-versions" | ".envrc"
+        "Makefile"
+            | "makefile"
+            | "justfile"
+            | "Justfile"
+            | "Taskfile.yml"
+            | "Taskfile.yaml"
+            | "CMakeLists.txt"
+            | "meson.build"
+            | "BUILD"
+            | "BUILD.bazel"
+            | ".tool-versions"
+            | ".envrc"
     ) {
         signals.push("toolchain_file".to_string());
         return (ProjectFileRole::Toolchain, signals);
@@ -211,7 +252,10 @@ pub fn classify_project_file(path: &Path, executable: bool, size: u64) -> (Proje
             signals.push(format!("doc_ext:.{ext}"));
             return (ProjectFileRole::Documentation, signals);
         }
-        if matches!(ext, "toml" | "yaml" | "yml" | "json" | "ini" | "conf" | "cfg" | "nix") {
+        if matches!(
+            ext,
+            "toml" | "yaml" | "yml" | "json" | "ini" | "conf" | "cfg" | "nix"
+        ) {
             signals.push(format!("config_ext:.{ext}"));
             return (ProjectFileRole::Configuration, signals);
         }

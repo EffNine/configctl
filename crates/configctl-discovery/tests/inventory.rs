@@ -75,7 +75,10 @@ fn skips_require_explicit_reasons() {
     let mut r = col.completeness().clone();
     r.finalize(false);
     assert_eq!(r.skipped, 5);
-    assert_eq!(r.status, Some(configctl_core::inventory::ScanStatus::Partial));
+    assert_eq!(
+        r.status,
+        Some(configctl_core::inventory::ScanStatus::Partial)
+    );
 }
 
 #[test]
@@ -107,10 +110,7 @@ fn governor_file_budget_stops_scan_with_explicit_reason() {
         "stop reasons must name the exhausted budget: {:?}",
         result.statistics.stop_reasons
     );
-    assert_eq!(
-        result.governor.limit_hit.as_deref(),
-        Some("file_budget")
-    );
+    assert_eq!(result.governor.limit_hit.as_deref(), Some("file_budget"));
 }
 
 #[test]

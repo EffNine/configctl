@@ -7,7 +7,7 @@
 
 use crate::mounts::MountRecord;
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{ResourceGovernor, governed_run};
+use configctl_core::governor::{governed_run, ResourceGovernor};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -177,7 +177,10 @@ fn read_pci_gpus() -> Vec<GpuInfo> {
     out
 }
 
-fn read_accelerators(governor: &Arc<ResourceGovernor>, runner: &dyn CommandRunner) -> AcceleratorInfo {
+fn read_accelerators(
+    governor: &Arc<ResourceGovernor>,
+    runner: &dyn CommandRunner,
+) -> AcceleratorInfo {
     let mut acc = AcceleratorInfo::default();
     // NVIDIA device nodes exist ⇒ CUDA-capable hardware present.
     if std::fs::symlink_metadata("/dev/nvidia0").is_ok()
@@ -191,7 +194,12 @@ fn read_accelerators(governor: &Arc<ResourceGovernor>, runner: &dyn CommandRunne
     }
     // Version only via fixed-argv governed probe; absence is not an error.
     if acc.cuda {
-        if let Ok(out) = governed_run(governor, runner, "nvidia-smi", ["--query-gpu=driver_version", "--format=csv,noheader"].iter()) {
+        if let Ok(out) = governed_run(
+            governor,
+            runner,
+            "nvidia-smi",
+            ["--query-gpu=driver_version", "--format=csv,noheader"].iter(),
+        ) {
             if out.status == Some(0) {
                 acc.cuda_version = out.stdout.lines().next().and_then(|l| clean(l, 32));
             }

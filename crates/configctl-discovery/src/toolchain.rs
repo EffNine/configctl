@@ -9,7 +9,7 @@
 //! and capped output.
 
 use configctl_core::command::CommandRunner;
-use configctl_core::governor::{GovernorDecision, ResourceGovernor, governed_run};
+use configctl_core::governor::{governed_run, GovernorDecision, ResourceGovernor};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -217,12 +217,13 @@ pub fn discover_executables_in(
         if !dir.is_absolute() {
             continue;
         }
-        let entries = match std::fs::read_dir(&dir) {
+        let entries = match std::fs::read_dir(dir) {
             Ok(it) => it.filter_map(|e| e.ok()).collect::<Vec<_>>(),
             Err(_) => continue,
         };
         if governor.account_dir_entries(entries.len() as u64) != GovernorDecision::Proceed {
-            inv.warnings.push("toolchain discovery stopped: directory entry budget".into());
+            inv.warnings
+                .push("toolchain discovery stopped: directory entry budget".into());
             break;
         }
         for entry in entries {
@@ -260,7 +261,8 @@ pub fn discover_executables_in(
                 continue;
             }
             if governor.account_file(0) != GovernorDecision::Proceed {
-                inv.warnings.push("toolchain discovery stopped: file budget".into());
+                inv.warnings
+                    .push("toolchain discovery stopped: file budget".into());
                 break;
             }
             let realpath = std::fs::canonicalize(&path)
