@@ -25,3 +25,4 @@ pub mod profile_load;
 pub mod redact;
 pub mod secrets;
 pub mod state;
+pub mod verify;

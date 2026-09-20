@@ -2,7 +2,7 @@
 //! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::{apply, capture, plan, scan};
+use configctl_cli::commands::{apply, capture, plan, scan, verify};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
@@ -109,6 +109,18 @@ enum Cmd {
         /// Machine-readable JSON on stdout (requires --yes unless --dry-run)
         #[arg(long)]
         json: bool,
+    },
+    /// Compare a profile against this machine (read-only, never repairs)
+    Verify {
+        /// Profile name or path to a profile bundle directory
+        #[arg(value_name = "PROFILE")]
+        profile: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Also fail on UNMANAGED / UNKNOWN findings
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -310,6 +322,44 @@ fn main() -> ExitCode {
                         println!("{}", env.to_json());
                     } else {
                         eprintln!("error: {}", apply::error_message(e));
+                    }
+                    ExitCode::from(out.exit_code as u8)
+                }
+                (None, None) => ExitCode::from(1),
+            }
+        }
+        Some(Cmd::Verify {
+            profile,
+            json,
+            strict,
+        }) => {
+            let out = verify::run_verify(profile, None, *strict, &runner);
+            match (&out.report, &out.error) {
+                (None, Some(e)) => {
+                    if *json {
+                        let env = configctl_cli::render::Envelope::error(
+                            "verify",
+                            e,
+                            "fix the profile and retry",
+                        );
+                        println!("{}", env.to_json());
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                (Some(rep), _) => {
+                    if *json {
+                        let env = configctl_cli::render::Envelope::ok(
+                            "verify",
+                            serde_json::to_value(rep).unwrap_or_default(),
+                        );
+                        let s = env.to_json();
+                        println!("{s}");
+                        let _: serde_json::Value =
+                            serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
+                    } else {
+                        print!("{}", verify::render_human(rep));
                     }
                     ExitCode::from(out.exit_code as u8)
                 }
