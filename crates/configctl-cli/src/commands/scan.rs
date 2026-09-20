@@ -196,6 +196,11 @@ fn unsafe_result() -> ScanResult {
         governor: Default::default(),
         package_inventory: Default::default(),
         toolchain: Default::default(),
+        filesystem: Default::default(),
+        dotfiles: Vec::new(),
+        project_contents: Vec::new(),
+        mounts: Vec::new(),
+        completeness: Default::default(),
     }
 }
 
@@ -235,6 +240,13 @@ pub fn render_human(result: &ScanResult, quiet: bool, verbose: bool) -> String {
             "Executables\n  {} discovered on PATH ({} version-probed)\n\n",
             s.executables_found, result.toolchain.version_probed
         ));
+        out.push_str(&format!(
+            "Filesystem\n  {} dotfiles, {} symlinks mapped, {} mounts recorded\n\n",
+            s.dotfiles_found, s.symlinks_found, result.mounts.len()
+        ));
+        // Completeness is always reported; PARTIAL names its reasons.
+        out.push_str(&result.completeness.render_human());
+        out.push('\n');
     }
 
     if s.warnings > 0 || !result.warnings.is_empty() {

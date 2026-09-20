@@ -13,8 +13,10 @@
 
 pub mod config;
 pub mod env;
+pub mod filesystem;
 pub mod git;
 pub mod inventory;
+pub mod mounts;
 pub mod packages;
 pub mod project;
 pub mod scanner;

@@ -5,15 +5,22 @@
 
 use crate::config::{self, ConfigFileRecord};
 use crate::env::{self, EnvFileRecord, GitStatus};
+use crate::filesystem::{
+    DotfileRecord, ProjectContentSummary, categorize_dotfile, classify_project_file,
+};
 use crate::git;
+use crate::inventory::InventoryCollector;
+use crate::mounts::{self, MountRecord};
 use crate::packages::{self, PackageInventory};
 use crate::project::{self, ProjectDetection};
 use crate::secret::{self, EntropyScorer};
 use crate::system::{self, SystemInfo};
 use crate::toolchain::{self, ToolchainInventory};
 use crate::walker::{BoundedWalker, StopReason, Visit};
+use configctl_core::classify::{FileKind, classify_file};
 use configctl_core::command::CommandRunner;
 use configctl_core::governor::{GovernorBudgets, GovernorSnapshot, ResourceGovernor};
+use configctl_core::inventory::{CompletenessReport, InventoryCounters, SymlinkRecord};
 use configctl_core::limits::Limits;
 use configctl_core::redact::SecretRegistry;
 use std::collections::BTreeMap;
@@ -37,6 +44,10 @@ struct WalkStats {
     excluded: usize,
     depth_reached: usize,
     stop_reasons: Vec<String>,
+    symlinks_seen: u64,
+    special_seen: u64,
+    denied_prunes: u64,
+    mount_boundaries: u64,
 }
 
 /// The full scan result (redaction-safe view; values never stored).
@@ -61,6 +72,36 @@ pub struct ScanResult {
     /// v1.1 toolchain inventory (capped lists + complete counts).
     #[serde(default)]
     pub toolchain: ToolchainInventory,
+    /// v1.1 filesystem summary: counters + classification histogram.
+    #[serde(default)]
+    pub filesystem: FilesystemSummary,
+    /// v1.1 dotfiles (capped list; total in [`FilesystemSummary`]).
+    #[serde(default)]
+    pub dotfiles: Vec<DotfileRecord>,
+    /// v1.1 per-project content roles (counts, never silent).
+    #[serde(default)]
+    pub project_contents: Vec<ProjectContentSummary>,
+    /// v1.1 mount table (recorded boundaries, not just traversed paths).
+    #[serde(default)]
+    pub mounts: Vec<MountRecord>,
+    /// v1.1 scan completeness (observed / mapped / skipped + reasons).
+    #[serde(default)]
+    pub completeness: CompletenessReport,
+}
+
+/// v1.1 filesystem summary.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FilesystemSummary {
+    pub counters: InventoryCounters,
+    /// `classification → count` for regular files.
+    pub classes: BTreeMap<String, u64>,
+    pub dotfiles_found: usize,
+    pub dotfiles_truncated: bool,
+    /// Mapped symlink relationships (capped; overflow counted).
+    pub symlinks: Vec<SymlinkRecord>,
+    pub symlinks_truncated: bool,
+    pub symlinks_overflow: u64,
 }
 
 impl ScanResult {
@@ -115,6 +156,10 @@ pub struct ScanStats {
     pub packages_found: usize,
     /// v1.1: executables discovered on PATH.
     pub executables_found: usize,
+    /// v1.1: symlinks mapped (never followed).
+    pub symlinks_found: usize,
+    /// v1.1: dotfiles discovered.
+    pub dotfiles_found: usize,
 }
 
 /// The scan service.
@@ -166,16 +211,17 @@ impl Scanner {
         }
 
         // 2. Discover: walk each root, collect candidate files.
-        let mut project_dirs: BTreeMap<String, PathBuf> = BTreeMap::new();
-        let mut env_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
-        let mut config_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+        // v1.1: every visit is also classified into the inventory; symlinks
+        // and special files are mapped, never followed or opened.
+        let mut walk = WalkCollector::new();
 
         let mut any_walked = false;
         for root in &existing_roots {
+            walk.collector.set_scan_root(root.clone());
             let walker =
                 BoundedWalker::new(limits.clone()).with_governor(std::sync::Arc::clone(&governor));
             let mut collector = |visit: &Visit| {
-                collect_visit(visit, &mut project_dirs, &mut env_paths, &mut config_paths);
+                walk.collect_visit(visit);
                 true
             };
             let stats = walker.walk(root, &mut collector);
@@ -185,6 +231,10 @@ impl Scanner {
             walk_stats_total.directories += stats.directories;
             walk_stats_total.permission_denied += stats.permission_denied;
             walk_stats_total.excluded += stats.excluded;
+            walk_stats_total.symlinks_seen += stats.symlinks_seen;
+            walk_stats_total.special_seen += stats.special_seen;
+            walk_stats_total.denied_prunes += stats.denied_prunes;
+            walk_stats_total.mount_boundaries += stats.mount_boundaries;
             if let Some(reason) = stats.stop_reason {
                 walk_stats_total
                     .stop_reasons
@@ -200,6 +250,11 @@ impl Scanner {
                 walk_stats_total
                     .stop_reasons
                     .push("permission_denied".to_string());
+            }
+            if stats.mount_boundaries > 0 {
+                walk_stats_total
+                    .stop_reasons
+                    .push("mount_boundary".to_string());
             }
             walk_stats_total.depth_reached =
                 walk_stats_total.depth_reached.max(stats.depth_reached);
@@ -225,13 +280,14 @@ impl Scanner {
         }
 
         // Cap env/config paths to the finding limit to bound work.
-        let mut env_list: Vec<&Path> = env_paths.values().map(|p| p.as_path()).collect();
+        let mut env_list: Vec<&Path> = walk.env_paths.values().map(|p| p.as_path()).collect();
         env_list.truncate(limits.max_findings);
-        let mut config_list: Vec<&Path> = config_paths.values().map(|p| p.as_path()).collect();
+        let mut config_list: Vec<&Path> = walk.config_paths.values().map(|p| p.as_path()).collect();
         config_list.truncate(limits.max_findings);
 
         // 3. Project detection
-        let mut projects: Vec<ProjectRecord> = project_dirs
+        let mut projects: Vec<ProjectRecord> = walk
+            .project_dirs
             .values()
             .filter_map(|dir| {
                 let det: ProjectDetection = project::detect_project(dir);
@@ -244,6 +300,9 @@ impl Scanner {
                     .unwrap_or_default();
                 let vcs = match det.vcs {
                     crate::project::VcsType::Git => "git",
+                    crate::project::VcsType::Mercurial => "hg",
+                    crate::project::VcsType::Subversion => "svn",
+                    crate::project::VcsType::Jujutsu => "jj",
                     crate::project::VcsType::Unknown => "unknown",
                 };
                 let mut proj_warnings = Vec::new();
@@ -368,7 +427,63 @@ impl Scanner {
             warnings.push(format!("governor budget exhausted: {hit}"));
         }
 
-        // 8. Diagnostics (kept for future use; silence unused warnings)
+        // 9. v1.1 filesystem summary, project content roles, mounts,
+        //    and the completeness report.
+        let project_contents = summarize_project_contents(&projects, &walk.visited);
+        if walk.visited_overflow > 0 {
+            warnings.push(format!(
+                "project content mapping truncated: {} file(s) beyond buffer not role-mapped",
+                walk.visited_overflow
+            ));
+        }
+        let mount_records = mounts::collect();
+        if walk_stats_total.mount_boundaries > 0 {
+            warnings.push(format!(
+                "{} mount boundar(ies) recorded, not descended (see `mounts`)",
+                walk_stats_total.mount_boundaries
+            ));
+        }
+
+        let filesystem = FilesystemSummary {
+            counters: walk.collector.counters().clone(),
+            classes: walk.collector.class_counts().clone(),
+            dotfiles_found: walk.dotfiles_total,
+            dotfiles_truncated: walk.dotfiles_truncated,
+            symlinks: walk.collector.symlinks().to_vec(),
+            symlinks_truncated: walk.collector.symlinks_truncated(),
+            symlinks_overflow: walk.collector.symlinks_overflow(),
+        };
+        let dotfiles = std::mem::take(&mut walk.dotfiles);
+
+        let mut completeness = walk.collector.completeness().clone();
+        if walk_stats_total.permission_denied > 0 {
+            completeness.record_skip(
+                "permission_denied",
+                walk_stats_total.permission_denied as u64,
+            );
+        }
+        if walk_stats_total.mount_boundaries > 0 {
+            completeness.record_skip("external_mount", walk_stats_total.mount_boundaries);
+        }
+        let specials = filesystem.counters.sockets
+            + filesystem.counters.fifos
+            + filesystem.counters.devices
+            + filesystem.counters.unknown_types;
+        if specials > 0 {
+            completeness.record_skip("special_file", specials);
+        }
+        if walk_stats_total.denied_prunes > 0 {
+            completeness.record_skip("policy_pruned", walk_stats_total.denied_prunes);
+        }
+        if governor.limit_hit().is_some() {
+            completeness.record_skip("budget_exhausted", 1);
+        }
+        // Observed = everything the scan encountered (mapped + skipped);
+        // without this, a budget-stopped scan would still read 100%.
+        completeness.observed = completeness.mapped + completeness.skipped;
+        completeness.finalize(governor.limit_hit().is_some());
+
+        // 10. Diagnostics (kept for future use; silence unused warnings)
         let _scorer = EntropyScorer::default();
         let _ = secret::NAME_LEXICON;
 
@@ -391,6 +506,8 @@ impl Scanner {
             stop_reasons,
             packages_found: package_inventory.total,
             executables_found: toolchain_inv.total,
+            symlinks_found: filesystem.counters.symlinks as usize,
+            dotfiles_found: filesystem.dotfiles_found,
         };
 
         let timestamp = rfc3339_now();
@@ -421,47 +538,175 @@ impl Scanner {
             governor: governor.snapshot(),
             package_inventory,
             toolchain: toolchain_inv,
+            filesystem,
+            dotfiles,
+            project_contents,
+            mounts: mount_records,
+            completeness,
         }
     }
 }
 
-/// Collect file-class candidates from one visited path.
-fn collect_visit(
-    visit: &Visit,
-    project_dirs: &mut BTreeMap<String, PathBuf>,
-    env_paths: &mut BTreeMap<String, PathBuf>,
-    config_paths: &mut BTreeMap<String, PathBuf>,
-) {
-    let path = &visit.path;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+/// Directory markers that identify a project root on their own.
+const DIR_MARKERS: &[&str] = &[".git", ".hg", ".svn", ".jj", ".github", ".vscode", ".cargo"];
 
-    if name == ".git" {
-        if let Some(parent) = path.parent() {
-            let key = parent.to_string_lossy().into_owned();
-            project_dirs
-                .entry(key)
-                .or_insert_with(|| parent.to_path_buf());
+/// Maximum regular files buffered for project content mapping.
+const MAX_VISITED_FILES: usize = 100_000;
+/// Maximum dotfile records retained in the report.
+const MAX_DOTFILES: usize = 2000;
+
+/// Per-walk collection state: legacy candidate maps plus the v1.1
+/// inventory, visited-file buffer, and dotfile records.
+struct WalkCollector {
+    project_dirs: BTreeMap<String, PathBuf>,
+    env_paths: BTreeMap<String, PathBuf>,
+    config_paths: BTreeMap<String, PathBuf>,
+    collector: InventoryCollector,
+    /// (path, size, executable) for regular files, bounded.
+    visited: Vec<(PathBuf, u64, bool)>,
+    visited_overflow: u64,
+    dotfiles: Vec<DotfileRecord>,
+    dotfiles_total: usize,
+    dotfiles_truncated: bool,
+}
+
+impl WalkCollector {
+    fn new() -> Self {
+        Self {
+            project_dirs: BTreeMap::new(),
+            env_paths: BTreeMap::new(),
+            config_paths: BTreeMap::new(),
+            collector: InventoryCollector::new(),
+            visited: Vec::new(),
+            visited_overflow: 0,
+            dotfiles: Vec::new(),
+            dotfiles_total: 0,
+            dotfiles_truncated: false,
         }
     }
-    if project::MARKERS.iter().any(|m| m.name == name && !m.is_dir) {
-        if let Some(parent) = path.parent() {
-            let key = parent.to_string_lossy().into_owned();
-            project_dirs
-                .entry(key)
-                .or_insert_with(|| parent.to_path_buf());
+
+    /// Collect candidates from one visit. Symlinks and special files are
+    /// mapped into the inventory only — their content is never read and
+    /// they never seed env/config/project candidates (no escape).
+    fn collect_visit(&mut self, visit: &Visit) {
+        let path = &visit.path;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let size_opt = if visit.kind == FileKind::Regular {
+            Some(visit.size)
+        } else {
+            None
+        };
+        self.collector
+            .observe_typed(path, visit.kind, size_opt, visit.executable);
+
+        match visit.kind {
+            FileKind::Directory => {
+                if DIR_MARKERS.iter().any(|m| *m == name) {
+                    if let Some(parent) = path.parent() {
+                        let key = parent.to_string_lossy().into_owned();
+                        self.project_dirs
+                            .entry(key)
+                            .or_insert_with(|| parent.to_path_buf());
+                    }
+                }
+                return;
+            }
+            FileKind::Regular => {}
+            // Symlinks / specials / unknown: mapped, never content-read.
+            _ => return,
+        }
+
+        if self.visited.len() < MAX_VISITED_FILES {
+            self.visited
+                .push((path.clone(), visit.size, visit.executable));
+        } else {
+            self.visited_overflow += 1;
+        }
+
+        // Broad dotfile discovery: any dotfile, categorized + classified.
+        if name.starts_with('.') {
+            self.dotfiles_total += 1;
+            if self.dotfiles.len() < MAX_DOTFILES {
+                let c = classify_file(path, FileKind::Regular, visit.executable);
+                self.dotfiles.push(DotfileRecord {
+                    path: path.to_string_lossy().into_owned(),
+                    category: categorize_dotfile(&name).to_string(),
+                    classification: c.class,
+                    action: c.action,
+                    signals: c.signals,
+                    reason: c.reason,
+                    name: name.clone(),
+                });
+            } else {
+                self.dotfiles_truncated = true;
+            }
+        }
+
+        // Legacy candidate matching (regular files only).
+        if name == ".git" {
+            // `.git` file (worktree/submodule pointer).
+            if let Some(parent) = path.parent() {
+                let key = parent.to_string_lossy().into_owned();
+                self.project_dirs
+                    .entry(key)
+                    .or_insert_with(|| parent.to_path_buf());
+            }
+        }
+        if project::MARKERS.iter().any(|m| m.name == name && !m.is_dir) {
+            if let Some(parent) = path.parent() {
+                let key = parent.to_string_lossy().into_owned();
+                self.project_dirs
+                    .entry(key)
+                    .or_insert_with(|| parent.to_path_buf());
+            }
+        }
+        if env::is_env_filename(&name) {
+            let key = path.to_string_lossy().into_owned();
+            self.env_paths.entry(key).or_insert_with(|| path.clone());
+        }
+        if config::match_config_type(&name) {
+            let key = path.to_string_lossy().into_owned();
+            self.config_paths.entry(key).or_insert_with(|| path.clone());
         }
     }
-    if env::is_env_filename(&name) {
-        let key = path.to_string_lossy().into_owned();
-        env_paths.entry(key).or_insert_with(|| path.clone());
+}
+
+/// Aggregate visited files into per-project role counts. Files outside any
+/// detected project are ignored here (they remain in the filesystem
+/// inventory with their own classifications).
+fn summarize_project_contents(
+    projects: &[ProjectRecord],
+    visited: &[(PathBuf, u64, bool)],
+) -> Vec<ProjectContentSummary> {
+    // Deepest project root first so nested projects own their files.
+    let mut roots: Vec<&ProjectRecord> = projects.iter().collect();
+    roots.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+    let mut summaries: BTreeMap<String, ProjectContentSummary> = BTreeMap::new();
+    for (path, size, executable) in visited {
+        let path_str = path.to_string_lossy();
+        let owner = roots
+            .iter()
+            .find(|p| path_str.starts_with(p.path.as_str()));
+        let Some(owner) = owner else { continue };
+        let summary = summaries
+            .entry(owner.path.clone())
+            .or_insert_with(|| ProjectContentSummary {
+                project: owner.name.clone(),
+                path: owner.path.clone(),
+                roles: BTreeMap::new(),
+                total: 0,
+            });
+        let (role, _signals) = classify_project_file(path, *executable, *size);
+        *summary.roles.entry(role.as_str().to_string()).or_insert(0) += 1;
+        summary.total += 1;
     }
-    if config::match_config_type(&name) {
-        let key = path.to_string_lossy().into_owned();
-        config_paths.entry(key).or_insert_with(|| path.clone());
-    }
+    let mut out: Vec<ProjectContentSummary> = summaries.into_values().collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
 }
 
 /// Probe how deep the tree under `root` actually goes (bounded by

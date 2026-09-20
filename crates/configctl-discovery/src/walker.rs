@@ -5,6 +5,7 @@
 //! during the walk. Traversal is iterative (explicit stack) so deep trees
 //! cannot overflow the call stack.
 
+use configctl_core::classify::FileKind;
 use configctl_core::governor::{GovernorDecision, ResourceGovernor};
 use configctl_core::limits::Limits;
 
@@ -20,6 +21,11 @@ pub struct WalkStats {
     pub stop_reason: Option<StopReason>,
     /// Governor budget that stopped the walk, if any (e.g. `file_budget`).
     pub governor_limit: Option<String>,
+    /// Breakdown of exclusions (recorded, never silent).
+    pub symlinks_seen: u64,
+    pub special_seen: u64,
+    pub denied_prunes: u64,
+    pub mount_boundaries: u64,
 }
 
 impl WalkStats {
@@ -70,9 +76,18 @@ pub const HARD_DENY_DIRS: &[&str] = &[
 ];
 
 /// A single visited file entry.
+///
+/// Regular files, symlinks, and special files are all yielded to the
+/// callback (with their [`FileKind`]); directories are traversed, never
+/// yielded. Symlinks are never followed.
 pub struct Visit {
     pub path: std::path::PathBuf,
     pub depth: usize,
+    pub kind: FileKind,
+    /// File size for regular files (0 otherwise).
+    pub size: u64,
+    /// Owner-executable bit observed (regular files only).
+    pub executable: bool,
 }
 
 /// Traversal rules applied on top of the hard deny-list.
@@ -145,11 +160,37 @@ impl BoundedWalker {
             Err(_) => return stats,
         };
 
+        // Device boundary baseline for mount-aware scanning (0 = unknown).
+        let root_dev = std::fs::symlink_metadata(root).ok().map(|m| meta_dev(&m)).unwrap_or(0);
+        let stay_on_fs = self
+            .governor
+            .as_ref()
+            .map(|g| g.budgets().stay_on_filesystem && !g.budgets().follow_mounts)
+            .unwrap_or(true);
+
         let mut stack: Vec<(std::path::PathBuf, usize)> =
             root_children.iter().map(|c| (c.path(), 1usize)).collect();
 
         let mut files: usize = 0;
         let mut total_bytes: usize = 0;
+
+        // Yield one non-directory visit to the callback. Honors `false` by
+        // stopping with `FindingLimit`.
+        macro_rules! yield_visit {
+            ($stats:expr, $path:expr, $depth:expr, $kind:expr, $size:expr, $exec:expr) => {{
+                let visit = Visit {
+                    path: $path.clone(),
+                    depth: $depth,
+                    kind: $kind,
+                    size: $size,
+                    executable: $exec,
+                };
+                if !f(&visit) {
+                    $stats.stop_reason = Some(StopReason::FindingLimit);
+                    return $stats;
+                }
+            }};
+        }
 
         // Iterative DFS: pop (path, depth).
         while let Some((path, depth)) = stack.pop() {
@@ -183,17 +224,32 @@ impl BoundedWalker {
                 Err(_) => continue,
             };
 
-            // Symlinks: record as excluded, never read the target.
-            if meta.file_type().is_symlink() {
+            let (mode, executable, dev) = meta_details(&meta);
+            let kind = FileKind::from_file_type(&meta.file_type(), mode);
+
+            // Symlinks: yielded for mapping, never followed.
+            if kind == FileKind::Symlink {
                 stats.excluded += 1;
+                stats.symlinks_seen += 1;
+                yield_visit!(stats, path, depth, kind, 0, false);
                 continue;
             }
 
             if meta.file_type().is_dir() {
+                // Mount boundary: record instead of descending blindly.
+                if stay_on_fs && root_dev != 0 && dev != 0 && dev != root_dev {
+                    stats.excluded += 1;
+                    stats.mount_boundaries += 1;
+                    continue;
+                }
                 if self.rules.is_excluded(&path, &mut stats) {
+                    stats.denied_prunes += 1;
                     continue;
                 }
                 stats.directories += 1;
+                // Yield directories for marker mapping (dir markers like
+                // `.git`/`.github`); traversal still descends below.
+                yield_visit!(stats, path, depth, FileKind::Directory, 0, false);
                 match std::fs::read_dir(&path) {
                     Ok(iter) => {
                         let children: Vec<_> = iter.filter_map(|c| c.ok()).collect();
@@ -216,6 +272,14 @@ impl BoundedWalker {
                     }
                     Err(_) => {}
                 }
+                continue;
+            }
+
+            // Special files: yielded for mapping, never opened.
+            if kind.is_special() || kind == FileKind::Unknown {
+                stats.excluded += 1;
+                stats.special_seen += 1;
+                yield_visit!(stats, path, depth, kind, 0, false);
                 continue;
             }
 
@@ -252,6 +316,9 @@ impl BoundedWalker {
             let visit = Visit {
                 path: path.clone(),
                 depth,
+                kind: FileKind::Regular,
+                size: size as u64,
+                executable,
             };
             if !f(&visit) {
                 stats.stop_reason = Some(StopReason::FindingLimit);
@@ -262,4 +329,31 @@ impl BoundedWalker {
 
         stats
     }
+}
+
+/// Platform details for metadata: (mode, executable, device).
+#[cfg(unix)]
+fn meta_details(meta: &std::fs::Metadata) -> (Option<u32>, bool, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let mode = meta.mode();
+    (Some(mode), mode & 0o111 != 0, meta.dev())
+}
+
+/// Platform details for metadata: (mode, executable, device).
+#[cfg(not(unix))]
+fn meta_details(_meta: &std::fs::Metadata) -> (Option<u32>, bool, u64) {
+    (None, false, 0)
+}
+
+/// Device id for mount-boundary detection (0 = unknown).
+#[cfg(unix)]
+fn meta_dev(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.dev()
+}
+
+/// Device id for mount-boundary detection (0 = unknown).
+#[cfg(not(unix))]
+fn meta_dev(_meta: &std::fs::Metadata) -> u64 {
+    0
 }

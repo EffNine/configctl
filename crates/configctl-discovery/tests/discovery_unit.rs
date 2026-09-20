@@ -235,10 +235,9 @@ fn walker_symlinks_not_followed() {
         true
     });
     assert!(seen.contains(&inside));
-    assert!(
-        !seen.iter().any(|p| *p == tmp.path().join("link.txt")),
-        "symlink must not be visited"
-    );
+    // v1.1: the symlink itself is yielded for mapping (kind symlink) but its
+    // target is never followed — `inside.txt` appears exactly once.
+    assert_eq!(seen.iter().filter(|p| *p == &inside).count(), 1);
 }
 
 #[test]
@@ -258,10 +257,12 @@ fn walker_symlink_dir_not_descended() {
         true
     });
     assert!(seen.iter().any(|p| *p == realdir.join("inner.txt")));
+    // v1.1: the link itself is yielded for mapping, but nothing beneath it
+    // may ever be traversed (the target is never followed).
     assert!(
         !seen
             .iter()
-            .any(|p| p.starts_with(tmp.path().join("linkdir"))),
+            .any(|p| p.starts_with(tmp.path().join("linkdir")) && *p != tmp.path().join("linkdir")),
         "symlinked directory must not be descended"
     );
 }

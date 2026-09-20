@@ -253,11 +253,22 @@ pub fn run_capture(
     // --- Projects ---
     let home_str = opts.home.as_ref().map(|h| h.to_string_lossy().into_owned());
     let mut projects: Vec<ProjectEntry> = Vec::new();
+    let mut project_warnings: Vec<String> = Vec::new();
     for p in &scan.projects {
         let portable = match &home_str {
             Some(h) => paths::to_portable(&p.path, h),
             None => p.path.clone(),
         };
+        // A project located exactly at the home root maps to bare `~`,
+        // which is not a representable project path. Record the omission
+        // explicitly instead of failing the whole capture.
+        if portable == "~" || portable == "~/" {
+            project_warnings.push(format!(
+                "project {:?} at home root not captured: bare `~` is not a representable project path",
+                p.name
+            ));
+            continue;
+        }
         let env_schema_ref = {
             let key = format!("env/{}.toml", p.name);
             if env_schemas.contains_key(&key) {
@@ -381,6 +392,8 @@ pub fn run_capture(
         ));
     }
 
+    let mut summary_warnings = scan.warnings.clone();
+    summary_warnings.extend(project_warnings);
     let summary = CaptureSummary {
         projects: profile.projects.len(),
         files: profile.files.len(),
@@ -393,7 +406,7 @@ pub fn run_capture(
         excluded,
         unsupported,
         unknown,
-        warnings: scan.warnings.clone(),
+        warnings: summary_warnings,
     };
 
     // --- Validation (fail-closed: never report success on invalid) ---
