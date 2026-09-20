@@ -2,7 +2,7 @@
 //! the source environment).
 
 use clap::{Parser, Subcommand};
-use configctl_cli::commands::{apply, capture, plan, scan, verify};
+use configctl_cli::commands::{apply, audit, capture, env, plan, scan, secrets, verify};
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
 
@@ -121,6 +121,107 @@ enum Cmd {
         /// Also fail on UNMANAGED / UNKNOWN findings
         #[arg(long)]
         strict: bool,
+    },
+    /// First-class .env discovery and schema verification (read-only)
+    Env {
+        #[command(subcommand)]
+        cmd: EnvCmd,
+    },
+    /// Secret references backed by the Linux Secret Service (values never in argv/logs/JSON)
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCmd,
+    },
+    /// Read-only safety audit (tracked secrets, key permissions, examples)
+    Audit {
+        /// Optional `git` submode (`configctl audit git [PATH...]`) or scan paths
+        #[arg(value_name = "TARGET_OR_PATH")]
+        target: Vec<String>,
+        /// Fail with exit 3 on findings at or above this severity
+        #[arg(long = "fail-on", value_name = "SEVERITY")]
+        fail_on: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum EnvCmd {
+    /// Discover .env files and classify variables (names only, never values)
+    Scan {
+        #[arg(value_name = "PATH")]
+        roots: Vec<String>,
+        #[arg(long = "root", value_name = "PATH")]
+        extra_roots: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List discovered variables with classifications (names only)
+    List {
+        #[arg(value_name = "PATH")]
+        roots: Vec<String>,
+        #[arg(long = "root", value_name = "PATH")]
+        extra_roots: Vec<String>,
+        #[arg(long = "project", value_name = "NAME")]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify project env schemas against live .env files (read-only)
+    Verify {
+        #[arg(value_name = "PROFILE")]
+        profile: Option<String>,
+        #[arg(long = "project", value_name = "NAME")]
+        project: Option<String>,
+        #[arg(long)]
+        strict: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretsCmd {
+    /// List secret references with backend status (never values)
+    List {
+        #[arg(value_name = "PROFILE")]
+        profile: Option<String>,
+        #[arg(long = "project", value_name = "NAME")]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Store a secret (value via hidden prompt or --stdin, never argv)
+    Set {
+        #[arg(value_name = "REF")]
+        secret_ref: String,
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show metadata, or the value with explicit --show (TTY or --force)
+    Get {
+        #[arg(value_name = "REF")]
+        secret_ref: String,
+        #[arg(long)]
+        show: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Import secret candidates from .env files (never rewrites sources)
+    Import {
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(short, long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -365,6 +466,332 @@ fn main() -> ExitCode {
                 }
                 (None, None) => ExitCode::from(1),
             }
+        }
+        Some(Cmd::Env { cmd }) => match cmd {
+            EnvCmd::Scan {
+                roots,
+                extra_roots,
+                json,
+            } => match env::run_env_scan(roots, extra_roots, None, &runner) {
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "env scan",
+                                &e,
+                                "pass scan paths"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                Ok(view) => {
+                    if *json {
+                        let data = serde_json::json!({
+                            "files": view.files, "variables": view.variables,
+                            "secrets": view.secrets, "config_values": view.config_values,
+                            "entries": view.entries.iter().map(|(p, v, c)| serde_json::json!({"project": p, "variable": v, "classification": c})).collect::<Vec<_>>(),
+                        });
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok("env scan", data).to_json()
+                        );
+                    } else {
+                        print!("{}", env::render_scan_human(&view));
+                    }
+                    ExitCode::SUCCESS
+                }
+            },
+            EnvCmd::List {
+                roots,
+                extra_roots,
+                project,
+                json,
+            } => match env::run_env_scan(roots, extra_roots, None, &runner) {
+                Err(e) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "env list",
+                                &e,
+                                "pass scan paths"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    ExitCode::from(2)
+                }
+                Ok(view) => {
+                    if *json {
+                        let entries: Vec<_> = view.entries.iter()
+                                .filter(|(p, _, _)| project.as_deref().map(|f| p == f).unwrap_or(true))
+                                .map(|(p, v, c)| serde_json::json!({"project": p, "variable": v, "classification": c}))
+                                .collect();
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok(
+                                "env list",
+                                serde_json::json!({"entries": entries})
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        print!("{}", env::render_list_human(&view, project.as_deref()));
+                    }
+                    ExitCode::SUCCESS
+                }
+            },
+            EnvCmd::Verify {
+                profile,
+                project,
+                strict,
+                json,
+            } => {
+                let out = env::run_env_verify(
+                    profile.as_deref(),
+                    project.as_deref(),
+                    *strict,
+                    None,
+                    &runner,
+                );
+                if let Some(e) = &out.error {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "env verify",
+                                e,
+                                "fix the profile and retry"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return ExitCode::from(2);
+                }
+                if *json {
+                    let data = serde_json::json!({"findings": out.findings.iter().map(|f| serde_json::json!({"project": f.project, "variable": f.variable, "kind": f.kind, "detail": f.detail})).collect::<Vec<_>>()});
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("env verify", data).to_json()
+                    );
+                } else {
+                    print!("{}", env::render_verify_human(&out));
+                }
+                ExitCode::from(out.exit_code as u8)
+            }
+        },
+        Some(Cmd::Secrets { cmd }) => match cmd {
+            SecretsCmd::List {
+                profile,
+                project,
+                json,
+            } => {
+                let out = secrets::run_list(profile.as_deref(), project.as_deref(), &runner);
+                if let Some(e) = &out.error {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "secrets list",
+                                e,
+                                "pass a profile"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return ExitCode::from(out.exit_code as u8);
+                }
+                if *json {
+                    let data = serde_json::json!({"entries": out.entries.iter().map(|e| serde_json::json!({"project": e.project, "name": e.name, "ref": e.secret_ref, "status": e.status})).collect::<Vec<_>>()});
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("secrets list", data).to_json()
+                    );
+                } else {
+                    print!("{}", secrets::render_list_human(&out));
+                }
+                ExitCode::SUCCESS
+            }
+            SecretsCmd::Set {
+                secret_ref,
+                stdin,
+                json,
+            } => {
+                let out = secrets::run_set(secret_ref, *stdin, None, &runner);
+                if *json {
+                    if let Some(e) = &out.error {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "secrets set",
+                                e,
+                                "see `configctl secrets set --help`"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok(
+                                "secrets set",
+                                serde_json::json!({"ref": out.secret_ref, "stored": true})
+                            )
+                            .to_json()
+                        );
+                    }
+                } else if let Some(e) = &out.error {
+                    eprintln!("error: {e}");
+                } else {
+                    println!("Stored {}.", out.secret_ref);
+                }
+                ExitCode::from(out.exit_code as u8)
+            }
+            SecretsCmd::Get {
+                secret_ref,
+                show,
+                force,
+                json,
+            } => {
+                let out = secrets::run_get(secret_ref, *show, *force, *json, &runner);
+                if *show {
+                    // Explicit value output on stdout only (never JSON).
+                    if let Some(v) = &out.value {
+                        v.expose(|b| {
+                            use std::io::Write;
+                            let _ = std::io::stdout().write_all(b);
+                            let _ = std::io::stdout().write_all(b"\n");
+                        });
+                        return ExitCode::SUCCESS;
+                    }
+                }
+                if *json {
+                    if let Some(e) = &out.error {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "secrets get",
+                                e,
+                                "check the ref and backend"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok(
+                                "secrets get",
+                                serde_json::json!({"ref": out.secret_ref, "status": out.status})
+                            )
+                            .to_json()
+                        );
+                    }
+                } else if let Some(e) = &out.error {
+                    eprintln!("error: {e}");
+                } else {
+                    println!("{}: {}", out.secret_ref, out.status);
+                }
+                ExitCode::from(out.exit_code as u8)
+            }
+            SecretsCmd::Import {
+                paths,
+                dry_run,
+                yes,
+                json,
+            } => {
+                let out = secrets::run_import(
+                    paths,
+                    *dry_run,
+                    *yes,
+                    dirs::home_dir().as_deref(),
+                    &runner,
+                );
+                if *json {
+                    if let Some(e) = &out.error {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "secrets import",
+                                e,
+                                "check the backend and paths"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        let data = serde_json::json!({
+                            "candidates": out.candidates.iter().map(|c| serde_json::json!({"file": c.file, "name": c.name, "classification": c.classification})).collect::<Vec<_>>(),
+                            "imported": out.imported, "ignored": out.ignored, "dry_run": out.dry_run,
+                        });
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok("secrets import", data).to_json()
+                        );
+                    }
+                } else {
+                    if out.candidates.is_empty() {
+                        println!("No secret candidates found.");
+                    } else {
+                        println!("Found {} potential secret(s).", out.candidates.len());
+                        for c in &out.candidates {
+                            println!("  {} — {} [{}]", c.file, c.name, c.classification);
+                        }
+                    }
+                    if !out.imported.is_empty() {
+                        println!(
+                            "Imported {} value(s) into the secret backend.",
+                            out.imported.len()
+                        );
+                    }
+                    println!("Never deletes or rewrites originals. Nothing leaves this machine.");
+                    if let Some(e) = &out.error {
+                        eprintln!("error: {e}");
+                    }
+                }
+                ExitCode::from(out.exit_code as u8)
+            }
+        },
+        Some(Cmd::Audit {
+            target,
+            fail_on,
+            json,
+        }) => {
+            let (git_only, paths): (bool, Vec<String>) = match target.first().map(|s| s.as_str()) {
+                Some("git") => (true, target[1..].to_vec()),
+                _ => (false, target.clone()),
+            };
+            let out = audit::run_audit(&paths, &[], fail_on.as_deref(), git_only, &runner);
+            if let Some(e) = &out.error {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::error("audit", e, "pass scan paths")
+                            .to_json()
+                    );
+                } else {
+                    eprintln!("error: {e}");
+                }
+                return ExitCode::from(2);
+            }
+            if *json {
+                let data = serde_json::json!({"findings": out.findings.iter().map(|f| serde_json::json!({"severity": f.severity, "code": f.code, "message": f.message})).collect::<Vec<_>>()});
+                println!(
+                    "{}",
+                    configctl_cli::render::Envelope::ok("audit", data).to_json()
+                );
+            } else {
+                print!("{}", audit::render_human(&out));
+            }
+            ExitCode::from(out.exit_code as u8)
         }
     };
     code

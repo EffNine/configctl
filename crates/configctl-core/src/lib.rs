@@ -10,6 +10,7 @@ pub mod backup;
 pub mod capture;
 pub mod command;
 pub mod env_schema;
+pub mod env_verify;
 pub mod envfile;
 pub mod files;
 pub mod gitmeta;
