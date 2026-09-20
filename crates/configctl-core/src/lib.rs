@@ -8,6 +8,7 @@
 pub mod apply;
 pub mod backup;
 pub mod capture;
+pub mod classify;
 pub mod command;
 pub mod env_schema;
 pub mod env_verify;
@@ -15,6 +16,7 @@ pub mod envfile;
 pub mod files;
 pub mod gitmeta;
 pub mod hash;
+pub mod inventory;
 pub mod limits;
 pub mod lock;
 pub mod observe;

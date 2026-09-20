@@ -14,6 +14,7 @@
 pub mod config;
 pub mod env;
 pub mod git;
+pub mod inventory;
 pub mod project;
 pub mod scanner;
 pub mod secret;
