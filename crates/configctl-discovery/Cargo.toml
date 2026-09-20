@@ -1,0 +1,17 @@
+[package]
+name = "configctl-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "configctl read-only discovery engine: projects, .env, configs, git, system"
+
+[dependencies]
+configctl-core = { path = "../configctl-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+configctl-cli = { path = "../configctl-cli" }
