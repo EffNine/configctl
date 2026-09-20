@@ -30,6 +30,32 @@ impl Drop for Guard {
     }
 }
 
+/// Scoped `HOME` override for tests that exercise capture (the capture CLI
+/// path reads the process `HOME`). Serialized on the same lock as the secret
+/// test-backend override so env mutations never race.
+struct HomeGuard {
+    _g: std::sync::MutexGuard<'static, ()>,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl HomeGuard {
+    fn set(home: &std::path::Path) -> Self {
+        let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        Self { _g: g, prev }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
 const CANARY_1: &str = "canary-live-value-AAA111bbb";
 const CANARY_2: &str = "ghp_canarytokensuffix999888777";
 const CANARY_3: &str = "sk-live-canary-CCC333ooo000";
@@ -101,6 +127,15 @@ fn canary_scan_capture_plan_outputs() {
 #[test]
 fn canary_capture_bundle_and_plan_apply_verify() {
     let (_tmp, home, proj, bundle, state) = build_world();
+    // Capture reads the process HOME. Isolate it to a dedicated source home
+    // (never the developer's real ~/) and make the target home differ so the
+    // unmanaged-file conflict below is deterministic: `.editorconfig` is
+    // byte-identical in both homes (MATCH), `.gitconfig` differs (CONFLICT).
+    let src_home = home.parent().unwrap().join("src-home");
+    std::fs::create_dir_all(&src_home).unwrap();
+    std::fs::write(src_home.join(".gitconfig"), "[user]\n\tname = Source\n").unwrap();
+    std::fs::write(src_home.join(".editorconfig"), "root = true\n").unwrap();
+    let _home_guard = HomeGuard::set(&src_home);
     // Isolate HOME-dependent bundle naming: capture into bundle dir.
     let runner = FakeCommandRunner::new();
     let cap = configctl_cli::commands::capture::run_capture(
@@ -148,6 +183,13 @@ fn canary_capture_bundle_and_plan_apply_verify() {
     );
     assert!(planned.error.is_none());
     let plan = planned.plan.unwrap();
+    assert!(
+        plan.conflicts
+            .iter()
+            .any(|c| c.target == "~/.gitconfig" && c.code == "unmanaged_exists"),
+        "expected a deterministic unmanaged conflict for ~/.gitconfig, got {:?}",
+        plan.conflicts
+    );
     assert_no_canary(
         "plan human",
         &configctl_cli::commands::plan::render_human(&plan),

@@ -354,6 +354,19 @@ fn huge_file_is_bounded_not_read() {
     );
 }
 
+/// Effective UID from `/proc/self/status`. `USER` is unset in many
+/// containers, where a string check would misclassify root as unprivileged.
+fn effective_uid() -> u32 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Uid:"))
+                .and_then(|l| l.split_whitespace().nth(2).and_then(|v| v.parse().ok()))
+        })
+        .unwrap_or(u32::MAX)
+}
+
 #[test]
 fn permission_denied_does_not_crash() {
     let tmp = tempfile::tempdir().unwrap();
@@ -380,7 +393,7 @@ fn permission_denied_does_not_crash() {
     // The scan must complete and report the permission problem, not panic.
     // The subdirectory is unreadable when unprivileged, so the walker must
     // surface a permission_denied stat or a permission warning.
-    let unprivileged = std::env::var("USER").ok().as_deref() != Some("root");
+    let unprivileged = effective_uid() != 0;
     if unprivileged {
         let surfaced = result.statistics.permission_denied > 0
             || result
