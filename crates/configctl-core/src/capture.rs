@@ -126,7 +126,7 @@ pub struct CaptureResult {
 /// they are never written anywhere.
 pub fn run_capture(
     opts: &CaptureOptions,
-    scan: &configctl_discovery_stub::ScanView,
+    scan: &scan_view::ScanView,
     runner: &dyn CommandRunner,
     registry_values: &[String],
 ) -> Result<CaptureResult, String> {
@@ -1015,7 +1015,7 @@ pub struct ScanViewAdapter {
     _private: (),
 }
 
-pub mod configctl_discovery_stub {
+pub mod scan_view {
     //! Adapter types mirroring the redaction-safe fields of the P1 scan.
 
     /// project name → (markers, role counts).

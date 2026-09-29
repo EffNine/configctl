@@ -145,3 +145,53 @@ fn read_hostname() -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use configctl_core::command::{CommandOutput, FakeCommandRunner};
+    use configctl_core::governor::GovernorBudgets;
+
+    fn out(status: i32, stdout: &str) -> CommandOutput {
+        CommandOutput {
+            status: Some(status),
+            stdout: stdout.to_string(),
+            ..CommandOutput::default()
+        }
+    }
+
+    #[test]
+    fn collect_records_only_tools_that_report_success() {
+        let governor = ResourceGovernor::new(GovernorBudgets::default());
+        let runner = FakeCommandRunner::new();
+        // Probe order: git, cargo, rustc, python3, node, npm, go, systemctl,
+        // apt, docker. Make git and cargo succeed; the rest fail to spawn.
+        runner.queue(out(0, "git version 2.43.0\n"));
+        runner.queue(out(0, "cargo 1.97.0 (abc)\n"));
+        for _ in 0..8 {
+            runner.queue(CommandOutput {
+                status: None,
+                ..CommandOutput::default()
+            });
+        }
+
+        let info = collect(&governor, &runner, Path::new("/tmp"));
+
+        assert!(info.has("git"));
+        assert!(info.has("cargo"));
+        assert!(!info.has("node"));
+        assert!(info.tools.contains("git"));
+        assert!(!info.tools.contains("node"));
+        assert_eq!(info.os, "linux");
+        assert_eq!(
+            info.details.get("git").and_then(|d| d.version.as_deref()),
+            Some("git version 2.43.0")
+        );
+    }
+
+    #[test]
+    fn has_is_false_for_unknown_tools() {
+        let info = SystemInfo::default();
+        assert!(!info.has("git"));
+    }
+}

@@ -151,3 +151,92 @@ pub fn check_tracking(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use configctl_core::command::{CommandOutput, FakeCommandRunner};
+
+    fn out(status: i32, stdout: &str) -> CommandOutput {
+        CommandOutput {
+            status: Some(status),
+            stdout: stdout.to_string(),
+            ..CommandOutput::default()
+        }
+    }
+
+    #[test]
+    fn find_git_root_parses_show_toplevel() {
+        let r = FakeCommandRunner::new();
+        r.queue(out(0, "/home/u/proj\n"));
+        let got = find_git_root(&r, Path::new("/home/u/proj/sub")).unwrap();
+        assert_eq!(got, Some(PathBuf::from("/home/u/proj")));
+    }
+
+    #[test]
+    fn find_git_root_returns_none_outside_a_repo() {
+        let r = FakeCommandRunner::new();
+        r.queue(out(128, "fatal: not a git repository\n"));
+        assert_eq!(find_git_root(&r, Path::new("/tmp")).unwrap(), None);
+    }
+
+    #[test]
+    fn git_root_for_dir_walks_up_to_the_repository() {
+        let r = FakeCommandRunner::new();
+        // First probe (the deep dir) is not a repo; the parent is.
+        r.queue(out(128, ""));
+        r.queue(out(0, "/repo\n"));
+        let got = git_root_for_dir(&r, Path::new("/repo/sub"));
+        assert_eq!(got, Some(PathBuf::from("/repo")));
+    }
+
+    #[test]
+    fn check_tracking_classifies_untracked_tracked_and_unknown() {
+        let root = Path::new("/repo");
+        let untracked = root.join("new.txt");
+        let tracked = root.join("src/main.rs");
+        let unknown = root.join("target/debug/build");
+        let files = vec![untracked.clone(), tracked.clone(), unknown.clone()];
+
+        let r = FakeCommandRunner::new();
+        // 1. `git status --porcelain=v1 -- <paths>`: only new.txt has changes.
+        r.queue(out(0, "?? new.txt\n"));
+        // 2. `git ls-files -- <remaining>`: only main.rs is tracked.
+        r.queue(out(0, "src/main.rs\n"));
+        // 3. `git check-ignore -q -- new.txt`: not ignored.
+        r.queue(out(1, ""));
+
+        let got = check_tracking(&r, root, &files);
+        assert_eq!(
+            got.get(&untracked.to_string_lossy().into_owned()),
+            Some(&GitStatus::Untracked)
+        );
+        assert_eq!(
+            got.get(&tracked.to_string_lossy().into_owned()),
+            Some(&GitStatus::Tracked)
+        );
+        assert_eq!(
+            got.get(&unknown.to_string_lossy().into_owned()),
+            Some(&GitStatus::Unknown)
+        );
+    }
+
+    #[test]
+    fn check_tracking_marks_ignored_files() {
+        let root = Path::new("/repo");
+        let ignored = root.join("secret.env");
+        let files = vec![ignored.clone()];
+
+        let r = FakeCommandRunner::new();
+        // 1. status reports it untracked.
+        r.queue(out(0, "?? secret.env\n"));
+        // 2. check-ignore says it is ignored (exit 0).
+        r.queue(out(0, ""));
+
+        let got = check_tracking(&r, root, &files);
+        assert_eq!(
+            got.get(&ignored.to_string_lossy().into_owned()),
+            Some(&GitStatus::Ignored)
+        );
+    }
+}

@@ -1472,3 +1472,19 @@ fn run(cli: Cli) -> ExitCode {
     };
     code
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_read_only_status_command() {
+        let cli = Cli::try_parse_from(["configctl", "status"]).expect("status parses");
+        assert!(matches!(cli.command, Some(Cmd::Status { .. })));
+    }
+
+    #[test]
+    fn rejects_unknown_subcommand() {
+        assert!(Cli::try_parse_from(["configctl", "definitely-not-a-command"]).is_err());
+    }
+}

@@ -1,6 +1,6 @@
 //! v1.1 hardcore capture + apply policy tests.
 
-use configctl_core::capture::configctl_discovery_stub as stub;
+use configctl_core::capture::scan_view as stub;
 use configctl_core::command::FakeCommandRunner;
 
 // --- Capture: global env, services, lock versions --------------------------

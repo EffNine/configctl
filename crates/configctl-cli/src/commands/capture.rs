@@ -298,8 +298,8 @@ fn preview_written(result: &capture::CaptureResult) -> Vec<String> {
     v
 }
 
-fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::configctl_discovery_stub::ScanView {
-    use capture::configctl_discovery_stub as stub;
+fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::scan_view::ScanView {
+    use capture::scan_view as stub;
     stub::ScanView {
         projects: r
             .projects

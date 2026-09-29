@@ -32,3 +32,19 @@ pub mod walker;
 pub use scanner::{ScanOptions, ScanResult, ScanStats, Scanner};
 pub use system::SystemInfo;
 pub use walker::WalkStats;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The crate's public re-export surface must stay constructible; a broken
+    /// re-export is a compile error here rather than a downstream surprise.
+    #[test]
+    fn public_reexports_are_reachable() {
+        let opts = ScanOptions::default();
+        assert!(opts.roots.is_empty());
+        let _stats = WalkStats::default();
+        let info = SystemInfo::default();
+        assert_eq!(info.os, "");
+    }
+}

@@ -140,7 +140,7 @@ fn core_capture_to(
     };
     let scan = scanner.scan(&opts, runner);
     let view = {
-        use core_capture::configctl_discovery_stub as stub;
+        use core_capture::scan_view as stub;
         stub::ScanView {
             projects: scan
                 .projects

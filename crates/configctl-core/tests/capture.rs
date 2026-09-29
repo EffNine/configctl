@@ -438,7 +438,7 @@ fn git_capture_allowlists_and_denies_creds() {
 
 #[test]
 fn capture_ordering_is_deterministic() {
-    use configctl_core::capture::configctl_discovery_stub as stub;
+    use configctl_core::capture::scan_view as stub;
     use configctl_core::command::FakeCommandRunner;
     let view = stub::ScanView {
         projects: vec![
