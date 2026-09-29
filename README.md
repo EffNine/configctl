@@ -4,7 +4,7 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.0.0-rc.1 released; `main` tracks `1.1.0-dev` (hardcore mapping).**
+**Status: v1.1.0 released (hardcore mapping); `main` tracks `1.2.0-dev`.**
 The full lifecycle is implemented:
 
 ```console

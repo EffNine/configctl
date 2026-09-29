@@ -1,6 +1,6 @@
 # CAPTURE.md — P2 declarative profile capture (implemented)
 
-Status: **Implemented (v1.0.0-rc.1); expanded in `1.1.0-dev` (hardcore
+Status: **Implemented (v1.0.0-rc.1); expanded in `1.1.0` (hardcore
 capture).** `configctl capture` transforms observed local environment state
 into a declarative, portable profile bundle. It is **non-mutating** w.r.t. the
 source environment: it reads the machine and writes exactly one new artifact

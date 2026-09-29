@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — configctl
 
-Status: **Implemented (v1.0.0-rc.1); extended in `1.1.0-dev`.** This document
+Status: **Implemented (v1.0.0-rc.1); extended and released in `1.1.0`.** This document
 describes actual behavior; P0 open questions resolved in this release are
 noted inline.
 Scope of this document: the v1.0 architecture (milestones P0–P8). Anything not
