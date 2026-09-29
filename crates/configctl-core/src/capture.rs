@@ -1004,17 +1004,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
-/// A minimal, redaction-safe view over the P1 `ScanResult`.
-///
-/// Defined here (rather than depending on `configctl-discovery`, which would
-/// invert the provider→core dependency direction) so `configctl-core` stays
-/// platform-independent. The CLI crate adapts the real `ScanResult` into
-/// this view.
-#[derive(Debug, Clone, Default)]
-pub struct ScanViewAdapter {
-    _private: (),
-}
-
 pub mod scan_view {
     //! Adapter types mirroring the redaction-safe fields of the P1 scan.
 
