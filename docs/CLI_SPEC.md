@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting.** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain` and `env consolidate` (preview).** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -359,13 +359,35 @@ configctl rollback [NAME|TARGET] [--plan <PLAN_ID>] [--last] [--list]
   operation is flagged and requires explicit `--yes` plus a permission
   warning).
 
-### 2.9 `configctl env scan|list|verify`
+### 2.9 `configctl env scan|list|verify|explain|consolidate`
 
 ```
 configctl env scan [PATH...] [--json]
 configctl env list [--project <P>] [--json]
 configctl env verify [NAME] [--project <P>] [--schema <FILE>] [--strict] [--json]
+configctl env explain [--home <DIR>] [--json]
+configctl env consolidate [--var <NAME>]... [--mode include|move] [--dry-run] [--home <DIR>] [--json]
 ```
+
+`env explain` (v1.2) maps where environment declarations live under `$HOME`
+(`~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.zshrc`, `~/.zshenv`,
+`~/.xprofile`, `~/.config/environment.d/*.conf`) with a conservative,
+non-evaluating parser. Each line is classified `managed`, `special`
+(behaviour-defining, e.g. `PATH`), `manual` (conditional, continued, or
+expansion-bearing), `secret`, or `structure`; values of secret-like variables
+are never retained. It reports conflicts and the effective precedence, and is
+read-only (exit 0, exit 2 only when `$HOME` is unknown).
+
+`env consolidate` (v1.2, phase E1) is **preview-only**: with `--dry-run` it
+shows the canonical `~/.config/configctl/env.sh` content, the marker include
+block that would be appended to each participating rc file, and a shadowing
+report. It writes nothing. Conflicting unmanaged values must be resolved with
+`--var NAME` (exit 5 otherwise); without `--dry-run` it reports the
+unimplemented write engine (phase E2) and exits 2. See
+[ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
+
+`env verify` reports missing/invalid/unknown variables per the project schema
+(see PROFILE_SCHEMA.md §4.2). Exit 3 on errors.
 
 `env scan` example:
 
@@ -579,6 +601,7 @@ Apply 6 operations to this machine? [y/N]
 | `env *`, `secrets *`, `audit`, `audit git` | P6 |
 | `rollback`, `doctor` (recovery) | P7 |
 | hardening, JSON stability, RC | P8 |
+| `env explain`, `env consolidate --dry-run` | v1.2 E1 |
 
 `profile migrate` supports `--to 1` only (v1 is the sole schema; already-
 current profiles report no-op). `secrets set` reads via hidden prompt or

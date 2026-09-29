@@ -14,6 +14,7 @@ pub mod command;
 pub mod env_schema;
 pub mod env_verify;
 pub mod envfile;
+pub mod envmap;
 pub mod files;
 pub mod gitmeta;
 pub mod governor;

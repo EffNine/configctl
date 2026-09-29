@@ -1,13 +1,15 @@
 # ENV_CONSOLIDATION.md — user-driven environment consolidation
 
-Status: **Design (proposed for v1.2).** Nothing in this document is
-implemented yet. Current behavior: `capture` records non-secret environment
-literals in the profile, and `apply` writes them to
-`~/.config/environment.d/90-configctl.conf` (see `APPLY.md`). This document
-specifies how configctl can additionally find environment declarations
-scattered across shell startup files, explain them in plain language, and —
-only with explicit approval — consolidate them into one managed file that
-every shell reads.
+Status: **Phase E1 implemented (v1.2); E2+ proposed.** Mode 1 (`configctl env
+explain`) is implemented, and `configctl env consolidate --dry-run` previews
+mode 2 (canonical file + include block). The journaled write engine (phase E2),
+mode 3 (E5), and `onboard` (E4) are not implemented yet; see §13. Current
+behavior otherwise: `capture` records non-secret environment literals in the
+profile, and `apply` writes them to `~/.config/environment.d/90-configctl.conf`
+(see `APPLY.md`). This document specifies how configctl can additionally find
+environment declarations scattered across shell startup files, explain them in
+plain language, and — only with explicit approval — consolidate them into one
+managed file that every shell reads.
 
 Audience: §1 is written for people who have never thought about `~/.bashrc`.
 Everything after it is an engineering specification.
@@ -396,7 +398,7 @@ exit 0 with empty data when nothing is found.
 
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
-| E1 | `env explain` (parser + human/JSON report) | fixture corpus green; no writes possible |
+| E1 ✅ | `env explain` (parser + human/JSON report) | delivered in v1.2: core `envmap` parser + 17 unit tests, `env explain` human/JSON, `env consolidate --dry-run` preview, e2e canary clean |
 | E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | idempotency + rollback tests green; redaction canary clean |
 | E3 | `env consolidate` CLI + shadowing report | e2e on messy fixture home |
 | E4 | `onboard` + `status` + `why` + `undo`/`--last` | beginner script walkthrough; docs updated |

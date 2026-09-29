@@ -4,6 +4,29 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
+## [Unreleased] — 1.2.0-dev
+
+Environment consolidation (v1.2), phase E1.
+
+### Added
+
+- `configctl env explain` — read-only map of environment declarations across
+  `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.zshrc`, `~/.zshenv`,
+  `~/.xprofile`, and `~/.config/environment.d/*.conf`, with a conservative,
+  non-evaluating parser. Lines are classified `managed`/`special`/`manual`/
+  `secret`/`structure`; secret-like values are never retained. Reports
+  conflicts and effective precedence. Backed by a new `configctl_core::envmap`
+  module (17 unit tests) and an e2e canary test.
+- `configctl env consolidate --dry-run` / `--var NAME` — previews the canonical
+  `~/.config/configctl/env.sh` content and the marker include block that would
+  be appended to each participating rc file, plus a shadowing report. Writes
+  nothing yet (the journaled write engine is phase E2).
+
+### Changed
+
+- Renamed the core scan-view adapter module `configctl_discovery_stub` →
+  `scan_view` so its name no longer implies a core→discovery dependency.
+
 ## [1.1.0] — 2026-09-30
 
 Hardcore mapping: discovery breadth is inverted from "not allowlisted →

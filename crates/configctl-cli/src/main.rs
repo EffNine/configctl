@@ -338,6 +338,28 @@ enum EnvCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Explain where environment settings live and which value wins (read-only)
+    Explain {
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Preview consolidating env settings into one managed file (dry-run only)
+    Consolidate {
+        /// Only consolidate these variables (repeatable)
+        #[arg(long = "var", value_name = "NAME")]
+        var: Vec<String>,
+        /// include (canonical file + rc include block) or move (assisted)
+        #[arg(long, default_value = "include")]
+        mode: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -434,6 +456,8 @@ fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
             EnvCmd::Scan { json, .. } | EnvCmd::List { json, .. } | EnvCmd::Verify { json, .. } => {
                 (Topic::Env, *json, false)
             }
+            EnvCmd::Explain { json, .. } => (Topic::Env, *json, false),
+            EnvCmd::Consolidate { json, .. } => (Topic::Env, *json, false),
         },
         Some(Cmd::Secrets { cmd }) => match cmd {
             SecretsCmd::List { json, .. }
@@ -925,6 +949,73 @@ fn run(cli: Cli) -> ExitCode {
                     );
                 } else {
                     print!("{}", env::render_verify_human(&out));
+                }
+                finish(out.exit_code as u8)
+            }
+            EnvCmd::Explain { home, json } => {
+                let out = env::run_env_explain(home.as_deref().map(std::path::Path::new));
+                if let Some(e) = &out.error {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "env explain",
+                                e,
+                                "set $HOME or pass --home"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return finish(2);
+                }
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("env explain", out.data).to_json()
+                    );
+                } else {
+                    print!("{}", out.text);
+                }
+                finish(out.exit_code as u8)
+            }
+            EnvCmd::Consolidate {
+                var,
+                mode,
+                dry_run,
+                home,
+                json,
+            } => {
+                let out = env::run_env_consolidate(
+                    var,
+                    mode,
+                    *dry_run,
+                    home.as_deref().map(std::path::Path::new),
+                );
+                if let Some(e) = &out.error {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "env consolidate",
+                                e,
+                                "run `configctl env consolidate --dry-run`"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {e}");
+                    }
+                    return finish(out.exit_code as u8);
+                }
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::ok("env consolidate", out.data).to_json()
+                    );
+                } else {
+                    print!("{}", out.text);
                 }
                 finish(out.exit_code as u8)
             }
