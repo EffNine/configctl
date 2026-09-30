@@ -4,7 +4,7 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.1.0 released (hardcore mapping); `main` tracks `1.2.0-dev`.**
+**Status: v1.2.0 released (environment consolidation: explain, consolidate, assisted move, onboard, undo).**
 The full lifecycle is implemented:
 
 ```console
@@ -19,11 +19,13 @@ $ configctl why ~/.gitconfig         # ownership, last operation, backup
 $ configctl rollback --plan <plan-id> --yes   # restore from backups
 $ configctl doctor                   # state + interrupted-apply diagnostics
 $ configctl guide [topic]            # plain-language help while you work
-$ configctl env explain              # where env settings live + which wins (v1.2)
-$ configctl env consolidate --dry-run # preview one managed env file (v1.2)
+$ configctl env explain              # where env settings live + which wins
+$ configctl env consolidate --dry-run # preview one managed env file
 $ configctl env consolidate          # plan it; `apply` writes, `rollback` undoes
-$ configctl onboard                  # guided first run (v1.2): scan + explain + bundle
-$ configctl undo                     # alias for `rollback --last` (v1.2)
+$ configctl env consolidate --mode move --dry-run       # preview tombstone patch (manual-only)
+$ configctl env consolidate --mode move --emit-patch P  # write diff + 0600 backups + restore cmds
+$ configctl onboard                  # guided first run: scan + explain + bundle
+$ configctl undo                     # alias for `rollback --last`
 ```
 
 Local-first, offline-capable, no accounts, no telemetry, no cloud dependency.
@@ -65,7 +67,7 @@ v1 bundles keep loading. See [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md).
 | [docs/STATE.md](docs/STATE.md) | State directory layout and SQLite schema |
 | [docs/SECURITY.md](docs/SECURITY.md) | Security guarantees and honest limitations |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations and deferred features |
-| [docs/ENV_CONSOLIDATION.md](docs/ENV_CONSOLIDATION.md) | Env consolidation design (proposed v1.2): sources, canonical file, include lines, beginner guide |
+| [docs/ENV_CONSOLIDATION.md](docs/ENV_CONSOLIDATION.md) | Env consolidation design (v1.2, E1–E5): sources, canonical file, include lines, assisted move, beginner guide |
 | [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md) | v1.1 direction: hardcore discovery, governance, execution classes |
 | [docs/RESOURCE_GOVERNOR.md](docs/RESOURCE_GOVERNOR.md) | v1.1 execution budgets: defaults, ceilings, CLI overrides |
 | [docs/RESOURCE_CLASSIFICATION.md](docs/RESOURCE_CLASSIFICATION.md) | v1.1 classification: classes, evidence, capture actions |

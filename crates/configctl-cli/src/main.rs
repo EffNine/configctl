@@ -387,6 +387,9 @@ enum EnvCmd {
         mode: String,
         #[arg(long)]
         dry_run: bool,
+        /// Write a unified tombstone diff for --mode move (manual-only; never auto-applies)
+        #[arg(long = "emit-patch", value_name = "FILE")]
+        emit_patch: Option<String>,
         #[arg(long = "home", value_name = "DIR")]
         home: Option<String>,
         #[arg(long)]
@@ -1018,16 +1021,48 @@ fn run(cli: Cli) -> ExitCode {
                 profile,
                 mode,
                 dry_run,
+                emit_patch,
                 home,
                 json,
             } => {
-                let out = env::run_env_consolidate(
-                    profile.as_deref(),
-                    cli.state_dir.as_deref(),
-                    home.as_deref().map(std::path::Path::new),
-                    *dry_run,
-                    mode,
-                );
+                let out = if mode == "move" {
+                    env::run_env_consolidate_move(
+                        profile.as_deref(),
+                        home.as_deref().map(std::path::Path::new),
+                        *dry_run,
+                        emit_patch.as_deref().map(std::path::Path::new),
+                    )
+                } else {
+                    if emit_patch.is_some() {
+                        let out = env::EnvConsolidateOutput {
+                            text: String::new(),
+                            data: serde_json::json!({}),
+                            error: Some("--emit-patch is only valid with --mode move".to_string()),
+                            exit_code: 2,
+                        };
+                        if *json {
+                            println!(
+                                "{}",
+                                configctl_cli::render::Envelope::error(
+                                    "env consolidate",
+                                    out.error.as_deref().unwrap_or(""),
+                                    "run `configctl env consolidate --dry-run`"
+                                )
+                                .to_json()
+                            );
+                        } else {
+                            eprintln!("error: {}", out.error.as_deref().unwrap_or(""));
+                        }
+                        return finish(2);
+                    }
+                    env::run_env_consolidate(
+                        profile.as_deref(),
+                        cli.state_dir.as_deref(),
+                        home.as_deref().map(std::path::Path::new),
+                        *dry_run,
+                        mode,
+                    )
+                };
                 if let Some(e) = &out.error {
                     if *json {
                         println!(

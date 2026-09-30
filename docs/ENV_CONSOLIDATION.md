@@ -1,13 +1,14 @@
 # ENV_CONSOLIDATION.md — user-driven environment consolidation
 
-Status: **Phases E1, E2, and E4 implemented (v1.2).** `configctl env explain`
+Status: **Phases E1–E5 implemented (v1.2).** `configctl env explain`
 (mode 1, read-only), `configctl env consolidate` — which persists a journaled
 plan writing the canonical `~/.config/configctl/env.sh` plus one marker include
 block per participating rc file, applied through the normal `apply` and undone
-by `rollback` — and `configctl onboard` (guided read-only first run that writes
-only the profile bundle) are implemented. Mode 3 (`--mode move`, phase E5) is
-not implemented: promoting it to an automatic path requires its own threat
-review, per §7. Current behavior otherwise: `capture` records non-secret
+by `rollback` — `configctl onboard` (guided read-only first run that writes
+only the profile bundle), and `configctl env consolidate --mode move`
+(assisted manual tombstone-patch emission with timestamped backups, E5) are
+implemented. Mode 3 stays deliberately manual: promoting it to an automatic
+path requires its own threat review, per §7. Current behavior otherwise: `capture` records non-secret
 environment literals in the profile, and `apply` writes them to
 `~/.config/environment.d/90-configctl.conf` (see `APPLY.md`). This document
 specifies how configctl can additionally find environment declarations
@@ -228,7 +229,7 @@ never values when secret), `data.conflicts[]`, `data.precedence[]`.
 |---|---|---|---|
 | 1 observe/explain | `env explain` | parser + report | none (read-only) — **implemented** |
 | 2 canonical + include | `env consolidate` | two op kinds, both backed up and rollback-supported | medium — **implemented** |
-| 3 move/remove | `env consolidate --mode move` | **no new engine op**: emits an assisted manual patch + backup | high → deliberately manual — **not implemented (E5)** |
+| 3 move/remove | `env consolidate --mode move` | **no new engine op**: emits an assisted manual patch + backup | high → deliberately manual — **implemented (E5)** |
 
 ---
 
@@ -291,18 +292,59 @@ screened with the same secret detector before write; a trip is a hard error.
 
 Purpose: remove the now-shadowed original lines so the environment stops being
 ambiguous. This is the only mode that can change semantics, so it is **not an
-automatic apply path** in v1.2.
+automatic apply path** in v1.2. There is no `--paste`, no auto-apply, and no
+journaled op: the user reviews and applies the emitted patch by hand.
 
-Flow:
+Flow (implemented, E5):
 
-1. `configctl env consolidate --mode move --dry-run` prints a per-line patch:
-   which lines would be commented out or deleted, and why it is safe.
-2. With `--emit-patch <file>` it writes a unified diff plus a timestamped
-   backup of every file involved (content-addressed, same backup store as
-   apply).
-3. The user applies it manually (`patch -p0 < file`) or with an explicit
-   `--paste` confirm in the TUI/CLI; `configctl rollback` cannot restore an
-   out-of-band patch, so the tool prints the exact restore command.
+1. `configctl env consolidate --mode move --dry-run` prints a per-file
+   per-line patch preview: which lines would be tombstoned (commented out)
+   and why it is safe. Strictly read-only; human and `--json` output.
+2. `configctl env consolidate --mode move --emit-patch <file>` writes a
+   unified diff to `<file>` (applies with `patch -p0 < <file>` run from
+   `$HOME`) plus one timestamped adjacent backup per touched file:
+   `<rc-file>.configctl-bak-<UTC-epoch-seconds>`, mode `0600`,
+   byte-identical to the pre-patch content (verified after write). It prints
+   the exact restore commands (`cp -p '<backup>' '<original>'`), the source
+   file hashes, and the re-run guidance below. It never mutates an rc file
+   or the canonical file — only the patch file and the backups are written.
+   An existing patch file is refused (exit 5) unless byte-identical
+   (idempotent re-emit).
+3. `configctl env consolidate --mode move` with neither `--dry-run` nor
+   `--emit-patch` exits 2 with guidance (manual-only by design).
+4. The user applies the patch manually (`patch -p0 < file`) or not at all.
+   `configctl rollback` cannot restore an out-of-band patch, so the tool
+   prints the exact restore (`cp`) commands at emit time.
+
+Tombstone format (comment-out, never delete):
+
+```diff
+--- .bashrc	<sha256 before>
++++ .bashrc	<sha256 before>.tombstoned
+@@ -4,1 +4,2 @@
+-export EDITOR=vim
++# configctl-move @<UTC-secs> UTC: EDITOR consolidated to ~/.config/configctl/env.sh
++# export EDITOR=vim
+```
+
+Eligibility (ALL must hold, else the line stays with an explicit reason):
+managed classification only (never special/PATH, manual, secret, or
+structure); not inside the include marker block; the variable is in the
+profile `[environment]` literals with a byte-for-byte equal value; the file
+already carries the managed include block (so the managed value still wins
+after tombstoning). Secret values never appear in the patch or the JSON.
+Fail-closed file rules: symlinks, non-regular files, files over 1 MiB,
+non-UTF-8 bytes, CRLF line endings, and partial/spoofed marker blocks refuse
+the whole file with a reason.
+
+Preconditions (exit 5): a secret-like profile literal trips the screen (hard
+error, names the variable only); a missing or stale canonical
+`~/.config/configctl/env.sh` (re-run mode 2 `consolidate` + `apply` first).
+
+TOCTOU note: the patch is point-in-time. Emit records every source file hash
+and prints "re-run `--dry-run` before applying; refuse to apply when the
+hashes no longer match". Rollback cannot restore an out-of-band patch (see
+T26); the printed `cp` restore commands are the recovery path.
 
 Hard exclusions (never eligible for removal): PATH/special variables,
 conditional or nested lines, any line whose evaluation the parser could not
@@ -369,9 +411,9 @@ exit 0 with empty data when nothing is found.
   `[environment]`; `verify` reports findings under the `envfile` provider when
   the canonical file exists, alongside the existing `env` (session artifact)
   provider.
-- Shadowing (**implemented as reporting**): `env consolidate` emits one
-  `shadowed_declaration` warning per still-declared site; automatic removal is
-  mode 3 (not implemented).
+- Shadowing (**implemented as reporting + assisted manual removal**): `env consolidate` emits one
+  `shadowed_declaration` warning per still-declared site; removal is mode 3
+  (`--mode move --dry-run` / `--emit-patch`), deliberately manual.
 - Session-level (**not claimed**): the tool does not claim to know what your
   current terminal sees. `env explain` computes the *expected* precedence from
   the documented file read order and says so explicitly.
@@ -387,6 +429,15 @@ exit 0 with empty data when nothing is found.
 | T23 | Precedence claim causes wrong value to win | explicit shadowing report; managed block at end; conflicts refuse to auto-pick |
 | T24 | TOCTOU on rc file between plan and apply | existing hash guard + stale-plan refusal; apply re-reads and verifies `expected_before` per operation before write |
 | T25 | Symlinked rc target attacks | existing symlink refusal at managed targets applies unchanged |
+| T26 | Stale hand-applied move patch changes semantics (rc edited after emit, then old patch applied) | patch is point-in-time with per-file hashes; emit prints "re-run `--dry-run` before applying; refuse on hash mismatch"; adjacent `0600` backups + exact `cp` restore commands printed at emit; `rollback` scope honestly excludes out-of-band patches |
+
+T21–T25 are unchanged by E5: move mode adds no evaluator, no shell
+expansion, and no automatic write path, so the mode-2 mitigations above
+apply exactly as before. T26 covers the one new artifact (the hand-applied
+patch); its mitigation is guidance + hashes + backups, not enforcement —
+configctl cannot stop a user from applying a stale patch by hand, so the
+threat is *bounded and recoverable* rather than eliminated. Promoting mode 3
+to an automatic apply path requires a separate threat review (see §7).
 
 ---
 
@@ -411,9 +462,9 @@ exit 0 with empty data when nothing is found.
 |---|---|---|
 | E1 ✅ | `env explain` (parser + human/JSON report) | delivered in v1.2: core `envmap` parser + 17 unit tests, `env explain` human/JSON, `env consolidate --dry-run` preview, e2e canary clean |
 | E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | delivered in v1.2: both kinds wired end to end (`SAFE_REPRODUCE`, backed up, rollback byte-exact), `expected_before` TOCTOU guards, canonical file + `environment.d` kept in sync from one profile, `verify` checks the canonical file (`envfile` provider); idempotency + stale-plan refusal + rollback tests green |
-| E3 | `env consolidate` CLI + shadowing report | e2e on messy fixture home |
+| E3 ✅ | `env consolidate` CLI + shadowing report | verified in v1.2: e2e on messy fixture home asserts `shadowed_declaration` warnings naming file and line |
 | E4 | `onboard` + `status` + `why` + `undo`/`--last` | delivered in v1.2: `onboard` (read-only + bundle only, refuses to overwrite), `status`/`why` shipped earlier, `apply --last`/`rollback --last` shipped earlier |
-| E5 | mode 3 assisted manual (patch emission) + threat review | design sign-off; opt-in only |
+| E5 ✅ | mode 3 assisted manual (patch emission) + threat review | delivered in v1.2: `--mode move --dry-run` preview (read-only) + `--mode move --emit-patch <file>` unified diff with adjacent `0600` backups and printed restore commands; threat review recorded as T26; no auto-apply path |
 
 E1–E2 are the core; E4 is where the beginner value lands. E5 ships only after
 E1–E4 are in real use.

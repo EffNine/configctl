@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain` and `env consolidate` (journaled plan).** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission).** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -366,7 +366,7 @@ configctl env scan [PATH...] [--json]
 configctl env list [--project <P>] [--json]
 configctl env verify [NAME] [--project <P>] [--schema <FILE>] [--strict] [--json]
 configctl env explain [--home <DIR>] [--json]
-configctl env consolidate [PROFILE] [--mode include|move] [--dry-run] [--home <DIR>] [--json]
+configctl env consolidate [PROFILE] [--mode include|move] [--dry-run] [--emit-patch <FILE>] [--home <DIR>] [--json]
 ```
 
 `env explain` (v1.2) maps where environment declarations live under `$HOME`
@@ -386,8 +386,39 @@ exact change and writes nothing (not even a plan). Otherwise it persists the
 plan and stops; the mutation happens only through `configctl apply` (approval,
 journal, backup, rollback). Secret entries are never written to the canonical
 file, and `expected_before` guards make apply refuse a plan whose target
-changed since planning (exit 5). `--mode move` (assisted manual removal) is not
-implemented (exit 2). See [ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
+changed since planning (exit 5). See [ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
+
+`env consolidate --mode move` (v1.2 E5) is assisted manual removal of the
+now-shadowed original lines — never automatic. `--dry-run` prints a per-file
+per-line tombstone preview and writes nothing. `--emit-patch <file>` writes a
+unified diff (apply by hand from `$HOME` with `patch -p0 < <file>`) plus one
+adjacent timestamped backup per touched file
+(`<rc-file>.configctl-bak-<UTC-seconds>`, `0600`, byte-identical), and prints
+the exact `cp -p` restore commands (`rollback` cannot restore an out-of-band
+patch). With neither flag it exits 2 with guidance. Only `managed` lines
+whose value byte-equals the canonical entry are eligible; secrets, PATH,
+conditionals, the include block itself, symlinks, oversize files, CRLF, and
+partial/spoofed marker blocks are refused with explicit reasons. Exit 0 even
+with zero eligible (NoOp); exit 5 on an existing differing patch file, a
+missing/stale canonical file, or a secret trip. `--emit-patch` with
+`--mode include` is a usage error (exit 2).
+
+Move-mode examples:
+
+```
+$ configctl env consolidate --mode move --dry-run
+Move preview (dry run) — nothing was written.
+  ~/.bashrc (sha256 60a5d337…)
+    line 1     EDITOR  tombstone (matches the managed value; include block overrides it)
+    line 4     PATH    stays (behaviour-defining variable; never moved)
+
+$ configctl env consolidate --mode move --emit-patch ~/move.patch
+Wrote patch ~/move.patch (2 line(s) in 2 file(s)).
+Backups (0600, byte-identical to the pre-patch content):
+  ~/.bashrc -> /home/user/.bashrc.configctl-bak-1759276800
+Restore (rollback cannot restore an out-of-band patch; run these yourself):
+  cp -p '/home/user/.bashrc.configctl-bak-1759276800' '/home/user/.bashrc'
+```
 
 `env verify` reports missing/invalid/unknown variables per the project schema
 (see PROFILE_SCHEMA.md §4.2). Exit 3 on errors.
@@ -631,6 +662,8 @@ Apply 6 operations to this machine? [y/N]
 | hardening, JSON stability, RC | P8 |
 | `env explain`, `env consolidate --dry-run` | v1.2 E1 |
 | `env consolidate` (plan → apply → rollback), `verify` `envfile` provider | v1.2 E2 |
+| `env consolidate` shadowing report (`shadowed_declaration`) | v1.2 E3 |
+| `env consolidate --mode move --dry-run` / `--emit-patch` (assisted manual, no auto-apply) | v1.2 E5 |
 | `onboard` | v1.2 E4 |
 | `undo` (alias for `rollback --last`) | v1.2 E4 |
 

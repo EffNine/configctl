@@ -588,7 +588,10 @@ pub fn run_env_consolidate(
 ) -> EnvConsolidateOutput {
     if mode == "move" {
         return consolidate_err(
-            "env consolidate --mode move is assistance-only and not implemented until phase E5",
+            "env consolidate --mode move is assisted-manual only: nothing was changed. \
+             Re-run with --dry-run to preview the tombstone patch, or \
+             --emit-patch <file> to write it (with timestamped backups). \
+             There is no automatic apply path for move mode.",
             2,
         );
     }
@@ -683,6 +686,354 @@ pub fn run_env_consolidate(
     EnvConsolidateOutput {
         text,
         data: super::plan::plan_json(&plan),
+        error: None,
+        exit_code: 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// env consolidate --mode move (v1.2 E5 — assisted manual ONLY)
+// ---------------------------------------------------------------------------
+
+use configctl_core::envmove;
+
+/// Quote one argv word for POSIX `sh` (single-quote, escaping embedded quotes).
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// `env consolidate --mode move` — assisted manual removal of the now-shadowed
+/// original lines. This function never mutates an rc file or the canonical
+/// file: `--dry-run` is strictly read-only, and `--emit-patch <file>` writes
+/// only the patch file plus one adjacent timestamped backup per touched file.
+/// With neither flag it exits 2 with guidance (manual-only by design).
+pub fn run_env_consolidate_move(
+    profile_arg: Option<&str>,
+    home_override: Option<&Path>,
+    dry_run: bool,
+    emit_patch: Option<&Path>,
+) -> EnvConsolidateOutput {
+    if !dry_run && emit_patch.is_none() {
+        return consolidate_err(
+            "env consolidate --mode move is assisted-manual only: nothing was changed. \
+             Re-run with --dry-run to preview the tombstone patch, or \
+             --emit-patch <file> to write it (with timestamped backups). \
+             Apply the patch yourself with `patch -p0 < <file>` from $HOME.",
+            2,
+        );
+    }
+
+    let profile_dir = match super::common::resolve_profile_default(profile_arg) {
+        Ok(d) => d,
+        Err(e) => return consolidate_err(&e, 2),
+    };
+    let loaded: LoadedProfile = match profile_load::load_profile_dir(&profile_dir) {
+        Ok(l) => l,
+        Err(e) => return consolidate_err(&e, 2),
+    };
+
+    let home: PathBuf = match home_override {
+        Some(h) => h.to_path_buf(),
+        None => match dirs::home_dir() {
+            Some(h) => h,
+            None => return consolidate_err("cannot determine $HOME", 2),
+        },
+    };
+
+    let entries = configctl_core::plan::canonical_env_entries(&loaded);
+    if entries.is_empty() {
+        let text = "No [environment] literals in the profile: nothing to move. No changes made.\n"
+            .to_string();
+        let data = serde_json::json!({
+            "mode": "move", "dry_run": dry_run,
+            "eligible": [], "ineligible": [],
+            "patch_file": null, "backups": [],
+            "restore_commands": [], "file_hashes": {}, "warnings": ["no_environment"],
+        });
+        return EnvConsolidateOutput {
+            text,
+            data,
+            error: None,
+            exit_code: 0,
+        };
+    }
+
+    let assessment = match envmove::assess_move(&home, &entries) {
+        Ok(a) => a,
+        Err(envmove::MoveError::SecretTrip(name)) => {
+            return consolidate_err(
+                &format!(
+                    "refusing: {name} is secret-like; it must stay a secret reference and can never be consolidated"
+                ),
+                5,
+            );
+        }
+        Err(envmove::MoveError::Precondition(msg)) => return consolidate_err(&msg, 5),
+    };
+
+    let eligible_json: Vec<serde_json::Value> = assessment
+        .eligible
+        .iter()
+        .map(|e| serde_json::json!({"file": e.file, "line": e.line, "name": e.name}))
+        .collect();
+    let ineligible_json: Vec<serde_json::Value> = assessment
+        .ineligible
+        .iter()
+        .map(|i| {
+            serde_json::json!({"file": i.file, "line": i.line, "name": i.name, "reason": i.reason})
+        })
+        .collect();
+    let file_hashes: BTreeMap<String, String> = assessment
+        .files
+        .iter()
+        .filter_map(|f| f.hash.clone().map(|h| (f.file.clone(), h)))
+        .collect();
+
+    // ---- human preview (shared by --dry-run and --emit-patch) ----
+    let mut text = String::new();
+    if emit_patch.is_none() {
+        text.push_str("Move preview (dry run) — nothing was written.\n\n");
+    } else {
+        text.push_str(
+            "Move patch emission — rc files and the canonical file are never modified.\n\n",
+        );
+    }
+    for f in &assessment.files {
+        match (&f.hash, &f.refused) {
+            (_, Some(reason)) => text.push_str(&format!("  {} — {reason}\n", f.file)),
+            (Some(hash), None) => {
+                text.push_str(&format!(
+                    "  {} (sha256 {})\n",
+                    f.file,
+                    &hash[..16.min(hash.len())]
+                ));
+                for e in assessment.eligible.iter().filter(|e| e.file == f.file) {
+                    text.push_str(&format!(
+                        "    line {:<5} {}  tombstone (matches the managed value; include block overrides it)\n",
+                        e.line, e.name
+                    ));
+                }
+                for i in assessment.ineligible.iter().filter(|i| i.file == f.file) {
+                    if i.line == 0 {
+                        continue;
+                    }
+                    text.push_str(&format!(
+                        "    line {:<5} {}  stays: {}\n",
+                        i.line, i.name, i.reason
+                    ));
+                }
+            }
+            (None, None) => text.push_str(&format!("  {} — unreadable\n", f.file)),
+        }
+    }
+    if assessment.eligible.is_empty() {
+        text.push_str("\nNo eligible lines: nothing to tombstone. No changes made.\n");
+    } else {
+        text.push_str(&format!(
+            "\n{} line(s) eligible in {} file(s); {} line(s) stay.\n",
+            assessment.eligible.len(),
+            assessment
+                .files
+                .iter()
+                .filter(|f| { assessment.eligible.iter().any(|e| e.file == f.file) })
+                .count(),
+            assessment.ineligible.iter().filter(|i| i.line != 0).count(),
+        ));
+    }
+
+    // ---- patch emission (only new files written: the patch + backups) ----
+    let mut patch_file: Option<String> = None;
+    let mut backups: Vec<serde_json::Value> = Vec::new();
+    let mut restore_commands: Vec<String> = Vec::new();
+
+    if let Some(patch_path) = emit_patch {
+        let now = configctl_core::state::now_secs();
+        let patch = envmove::build_patch(&assessment, now);
+        // Refuse to overwrite an existing patch unless byte-identical.
+        if patch_path.exists() {
+            match std::fs::read(patch_path) {
+                Ok(cur) if cur == patch.as_bytes() => {
+                    text.push_str(&format!(
+                        "\nPatch {} already exists with identical content; nothing written.\n",
+                        patch_path.display()
+                    ));
+                }
+                _ => {
+                    return consolidate_err(
+                        &format!(
+                            "patch file {} already exists with different content; remove it or choose another path with --emit-patch <file>",
+                            patch_path.display()
+                        ),
+                        5,
+                    );
+                }
+            }
+            // Idempotent repeat: report the patch, no backups rewritten.
+            let data = serde_json::json!({
+                "mode": "move", "dry_run": dry_run,
+                "eligible": eligible_json, "ineligible": ineligible_json,
+                "patch_file": patch_path.to_string_lossy(),
+                "backups": backups, "restore_commands": restore_commands,
+                "file_hashes": file_hashes, "warnings": assessment.warnings,
+            });
+            if dry_run {
+                text.push_str("\nNothing was written (dry run also skips patch emission when the patch already exists).\n");
+            }
+            return EnvConsolidateOutput {
+                text,
+                data,
+                error: None,
+                exit_code: 0,
+            };
+        }
+
+        // Timestamped adjacent backups first (0600, byte-identical, verified).
+        let mut touched: Vec<&str> = assessment.eligible.iter().map(|e| e.rel.as_str()).collect();
+        touched.sort();
+        touched.dedup();
+        for rel in touched {
+            let abs = home.join(rel);
+            let current = match std::fs::read(&abs) {
+                Ok(b) => b,
+                Err(_) => {
+                    return consolidate_err(
+                        &format!("{rel} changed since the preview; re-run --dry-run"),
+                        5,
+                    );
+                }
+            };
+            // TOCTOU narrowing: the bytes backed up must be exactly what the
+            // preview assessed; a hand edit in between refuses instead of
+            // producing a backup/patch pair that disagrees.
+            let assessed = assessment.files.iter().find(|f| f.rel == rel);
+            if assessed
+                .and_then(|f| f.hash.as_deref())
+                .map(|h| configctl_core::hash::file_content_hash(&current) != h)
+                .unwrap_or(false)
+            {
+                return consolidate_err(
+                    &format!("{rel} changed since the preview; re-run --dry-run"),
+                    5,
+                );
+            }
+            let backup = abs.with_extension(format!(
+                "{}configctl-bak-{now}",
+                abs.extension()
+                    .map(|x| format!("{}.", x.to_string_lossy()))
+                    .unwrap_or_default()
+            ));
+            if backup.exists() {
+                match std::fs::read(&backup) {
+                    Ok(cur) if cur == current => {}
+                    _ => {
+                        return consolidate_err(
+                            &format!(
+                                "backup {} already exists with different content; refusing",
+                                backup.display()
+                            ),
+                            5,
+                        );
+                    }
+                }
+            } else {
+                if let Err(e) = std::fs::write(&backup, &current) {
+                    return consolidate_err(
+                        &format!("cannot write backup {}: {e:?}", backup.display()),
+                        1,
+                    );
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ =
+                        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600));
+                }
+                // Verify byte-identical.
+                match std::fs::read(&backup) {
+                    Ok(cur) if cur == current => {}
+                    _ => {
+                        return consolidate_err(
+                            &format!("backup {} failed verification; refusing", backup.display()),
+                            1,
+                        );
+                    }
+                }
+            }
+            let original = format!("~/{rel}");
+            restore_commands.push(format!(
+                "cp -p {} {}",
+                sh_quote(&backup.display().to_string()),
+                sh_quote(&abs.display().to_string())
+            ));
+            backups.push(serde_json::json!({
+                "original": original,
+                "backup": backup.display().to_string(),
+            }));
+        }
+
+        if let Some(parent) = patch_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return consolidate_err(&format!("cannot create patch directory: {e:?}"), 1);
+                }
+            }
+        }
+        if let Err(e) = std::fs::write(patch_path, patch.as_bytes()) {
+            return consolidate_err(&format!("cannot write patch file: {e:?}"), 1);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(patch_path, std::fs::Permissions::from_mode(0o600));
+        }
+        patch_file = Some(patch_path.to_string_lossy().into_owned());
+
+        text.push_str(&format!(
+            "\nWrote patch {} ({} line(s) in {} file(s)).\n",
+            patch_path.display(),
+            assessment.eligible.len(),
+            backups.len(),
+        ));
+        if backups.is_empty() {
+            text.push_str("No files touched: no backups were needed.\n");
+        } else {
+            text.push_str("Backups (0600, byte-identical to the pre-patch content):\n");
+            for b in &backups {
+                text.push_str(&format!(
+                    "  {} -> {}\n",
+                    b["original"].as_str().unwrap_or("?"),
+                    b["backup"].as_str().unwrap_or("?")
+                ));
+            }
+            text.push_str(
+                "Restore (rollback cannot restore an out-of-band patch; run these yourself):\n",
+            );
+            for cmd in &restore_commands {
+                text.push_str(&format!("  {cmd}\n"));
+            }
+        }
+        text.push_str(
+            "Point-in-time: re-run `configctl env consolidate --mode move --dry-run` before applying; \
+             refuse to apply when the file hashes above no longer match. \
+             Apply from $HOME with `patch -p0 < <patch file>`.\n",
+        );
+    } else {
+        text.push_str(
+            "\nNothing has been changed. To write the patch: \
+             `configctl env consolidate --mode move --emit-patch <file> [PROFILE]`.\n",
+        );
+    }
+
+    let data = serde_json::json!({
+        "mode": "move", "dry_run": dry_run,
+        "eligible": eligible_json, "ineligible": ineligible_json,
+        "patch_file": patch_file,
+        "backups": backups, "restore_commands": restore_commands,
+        "file_hashes": file_hashes, "warnings": assessment.warnings,
+    });
+    EnvConsolidateOutput {
+        text,
+        data,
         error: None,
         exit_code: 0,
     }

@@ -4,9 +4,9 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
-## [Unreleased] — 1.2.0-dev
+## [1.2.0] — 2026-09-30
 
-Environment consolidation (v1.2), phases E1–E2.
+Environment consolidation (v1.2), phases E1–E5.
 
 ### Added
 
@@ -23,6 +23,20 @@ Environment consolidation (v1.2), phases E1–E2.
   and undone by `rollback`; `expected_before` guards make apply refuse a stale
   plan instead of overwriting a hand edit. Secret entries never reach the
   canonical file, which is additionally screened for secret-like values.
+  Every still-declared site is reported as a non-blocking
+  `shadowed_declaration` plan warning naming the file and line.
+- `configctl env consolidate --mode move` — assisted manual removal of the
+  now-shadowed original lines (E5). `--dry-run` prints a per-file per-line
+  tombstone preview and writes nothing; `--emit-patch <file>` writes a
+  unified diff (hand-applied from `$HOME` with `patch -p0 < <file>`) plus one
+  adjacent timestamped backup per touched file
+  (`<rc-file>.configctl-bak-<UTC-seconds>`, `0600`, byte-identical, verified
+  after write) and prints the exact `cp -p` restore commands (`rollback`
+  cannot restore an out-of-band patch). Only `managed` lines whose value
+  byte-equals the canonical entry are eligible; a missing/stale canonical
+  file, a secret trip, or an existing differing patch file fails closed
+  (exit 5). There is no automatic apply path; promotion would need its own
+  threat review (recorded as T26 in `ENV_CONSOLIDATION.md` §11).
 - Two new plan operation kinds, `EnvFileWrite` and `IncludeLineAdd`, both
   `SAFE_REPRODUCE`, backed up, and rollback-supported (byte-exact restore).
 - `verify` checks the canonical shell env file under a new `envfile` provider
