@@ -23,6 +23,7 @@ $ configctl env explain              # where env settings live + which wins (v1.
 $ configctl env consolidate --dry-run # preview one managed env file (v1.2)
 $ configctl env consolidate          # plan it; `apply` writes, `rollback` undoes
 $ configctl onboard                  # guided first run (v1.2): scan + explain + bundle
+$ configctl undo                     # alias for `rollback --last` (v1.2)
 ```
 
 Local-first, offline-capable, no accounts, no telemetry, no cloud dependency.

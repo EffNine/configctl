@@ -573,6 +573,16 @@ existing non-empty output directory is refused (exit 5) unless `--force`.
 `--home` overrides `$HOME` for the environment explanation and the default
 output location.
 
+### 2.17 `configctl undo`
+
+```
+configctl undo [--yes] [--dry-run] [--json]
+```
+
+Alias for `rollback --last`: rolls back the most recent plan. Same approval,
+lock, journal, and fail-closed guards as `rollback`; refuses (exit 2/5) when
+the latest plan was never applied or was already rolled back.
+
 ---
 
 ## 3. Output rules
@@ -622,6 +632,7 @@ Apply 6 operations to this machine? [y/N]
 | `env explain`, `env consolidate --dry-run` | v1.2 E1 |
 | `env consolidate` (plan → apply → rollback), `verify` `envfile` provider | v1.2 E2 |
 | `onboard` | v1.2 E4 |
+| `undo` (alias for `rollback --last`) | v1.2 E4 |
 
 `profile migrate` supports `--to 1` only (v1 is the sole schema; already-
 current profiles report no-op). `secrets set` reads via hidden prompt or

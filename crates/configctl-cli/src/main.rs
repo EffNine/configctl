@@ -292,6 +292,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Undo the most recent plan (alias for `rollback --last`)
+    Undo {
+        /// Approve non-interactively
+        #[arg(short, long)]
+        yes: bool,
+        /// Preview without writing
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -491,6 +503,7 @@ fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
         Some(Cmd::Status { json, .. }) => (Topic::Status, *json, false),
         Some(Cmd::Why { json, .. }) => (Topic::Why, *json, false),
         Some(Cmd::Onboard { json, .. }) => (Topic::Start, *json, false),
+        Some(Cmd::Undo { json, .. }) => (Topic::Rollback, *json, false),
         Some(Cmd::Profile { cmd }) => match cmd {
             ProfileCmd::List { json }
             | ProfileCmd::Show { json, .. }
@@ -1327,6 +1340,64 @@ fn run(cli: Cli) -> ExitCode {
                                 "rollback",
                                 &rollback::error_message(e),
                                 "see `configctl doctor`"
+                            )
+                            .to_json()
+                        );
+                    } else {
+                        eprintln!("error: {}", rollback::error_message(e));
+                    }
+                    finish(out.exit_code as u8)
+                }
+                (None, None) => finish(1),
+            }
+        }
+        Some(Cmd::Undo { yes, dry_run, json }) => {
+            let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
+            let out = match rollback::resolve_last_plan(&state_dir) {
+                Ok(id) => {
+                    if !*json {
+                        eprintln!("using latest plan {id}");
+                    }
+                    rollback::run_rollback(
+                        Some(&id),
+                        None,
+                        false,
+                        cli.state_dir.as_deref(),
+                        None,
+                        *yes,
+                        *dry_run,
+                        *json,
+                        &runner,
+                    )
+                }
+                Err(e) => rollback::RollbackOutput {
+                    report: None,
+                    plans: None,
+                    exit_code: rollback::exit_code_for(&e),
+                    error: Some(e),
+                },
+            };
+            match (&out.report, &out.error) {
+                (Some(rep), _) => {
+                    if *json {
+                        let data = serde_json::json!({"plan_id": rep.plan_id, "restored": rep.restored, "removed": rep.removed, "manual": rep.manual, "dry_run": rep.dry_run});
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::ok("undo", data).to_json()
+                        );
+                    } else {
+                        print!("{}", rollback::render_human(rep));
+                    }
+                    finish(0)
+                }
+                (None, Some(e)) => {
+                    if *json {
+                        println!(
+                            "{}",
+                            configctl_cli::render::Envelope::error(
+                                "undo",
+                                &rollback::error_message(e),
+                                "there is nothing to undo, or see `configctl doctor`"
                             )
                             .to_json()
                         );

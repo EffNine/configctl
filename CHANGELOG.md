@@ -34,6 +34,8 @@ Environment consolidation (v1.2), phases E1–E2.
   bundle (default `~/.config/configctl/profiles/this-machine`). It never plans,
   applies, or changes configuration, and refuses to overwrite a non-empty
   output directory (exit 5) unless `--force`.
+- `configctl undo` — alias for `rollback --last`, undoing the most recent plan
+  with the same approval, lock, journal, and fail-closed guards.
 
 ### Changed
 
