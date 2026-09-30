@@ -21,14 +21,16 @@ Where settings live on a Linux machine (the messy part):
     project .env files                 per-project values
 
 A plain terminal may not see values set in environment.d. `configctl env
-explain` maps every declaration, flags conflicts, and says which value wins;
-`configctl env consolidate --dry-run` previews putting them into one managed
-file (`~/.config/configctl/env.sh`) with a marked include line in your shell
-files. Writing is not enabled yet (phase E2 in docs/ENV_CONSOLIDATION.md).
+explain` maps every declaration, flags conflicts, and says which value wins.
+`configctl env consolidate` plans putting the profile's environment literals
+into one managed file (`~/.config/configctl/env.sh`) with a marked include line
+in your shell files; nothing changes until you run `configctl apply`, and
+`configctl rollback` undoes it. Use `--dry-run` first to see the exact change.
 
 Common confusion:
   - env scan is read-only; it does not import anything.
   - "secret" is a classification, not a value store.
+  - env consolidate only *plans*; apply is what writes.
 
 Next:
     configctl guide secrets

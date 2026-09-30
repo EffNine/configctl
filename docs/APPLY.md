@@ -24,8 +24,22 @@ classify recovery.
 
 ## Execution order
 
-Packages → files → environment → services → git. Rollback order is the
-reverse.
+Packages → files → environment → services → git → shell env artifacts.
+Rollback order is the reverse.
+
+## Shell env artifacts (v1.2)
+
+Two additional operation kinds write shell environment state, both
+`SAFE_REPRODUCE`, backed up, and rollback-supported:
+
+| Kind | Target | Behavior |
+|---|---|---|
+| `EnvFileWrite` | `~/.config/configctl/env.sh` | Full-content replace with the canonical file composed from the profile's `[environment]` literals. Secret entries stay references and are never written; the composed content is screened for secret-like values and a trip is a hard error. Op order is identical to the existing managed env file. |
+| `IncludeLineAdd` | a `~/` shell startup file | Appends the marker-delimited include block at the end of the file, idempotently. Only the two markers are added; nothing else is edited. A file that is a symlink, non-regular, or larger than 1 MiB is refused. |
+
+Both carry `expected_before` (the file-content hash observed at plan time), so
+apply refuses a plan whose target changed since planning (exit 5) instead of
+overwriting the user's edit.
 
 ## Files
 

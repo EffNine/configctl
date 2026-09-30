@@ -480,6 +480,12 @@ fn execute_op(
         OperationKind::EnvironmentSchemaChange => execute_env_op(
             state_dir, plan_id, plan, loaded, home, op, &journal, &failpoint,
         ),
+        OperationKind::EnvFileWrite => execute_env_file_write(
+            state_dir, plan_id, plan, loaded, home, op, &journal, &failpoint,
+        ),
+        OperationKind::IncludeLineAdd => {
+            execute_include_line_op(state_dir, plan_id, plan, home, op, &journal, &failpoint)
+        }
         OperationKind::ServiceEnable | OperationKind::ServiceDisable => {
             execute_service_op(state_dir, plan_id, plan, runner, op, &journal, &failpoint)
         }
@@ -909,6 +915,331 @@ fn execute_env_op(
     }))
 }
 
+/// Upper bound for shell startup files we will append an include block to.
+/// Larger files are refused rather than truncated (a truncating edit would
+/// destroy the user's shell configuration).
+const MAX_RC_BYTES: u64 = 1024 * 1024;
+
+/// Shared TOCTOU gate for the v1.2 env artifacts: the bytes read now must be
+/// exactly what the plan recorded as `expected_before`.
+///
+/// Error strings name the target only — never values.
+fn guard_expected_before(
+    op: &Operation,
+    current: Option<&[u8]>,
+    re_run_hint: &str,
+) -> Result<(), ApplyError> {
+    match (&op.expected_before, current) {
+        (Some(want), Some(cur)) if crate::hash::file_content_hash(cur) == *want => Ok(()),
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(ApplyError::Conflict(format!(
+            "{} exists but the plan expected it to be absent; {re_run_hint}",
+            op.target
+        ))),
+        (Some(_), None) => Err(ApplyError::Conflict(format!(
+            "{} is missing but the plan expected it to exist; {re_run_hint}",
+            op.target
+        ))),
+        _ => Err(ApplyError::Conflict(format!(
+            "{} changed since planning; {re_run_hint}",
+            op.target
+        ))),
+    }
+}
+
+/// Atomic full-content write with an optional pre-write backup.
+///
+/// Returns the backup sha (when a previous file existed).
+fn atomic_write_with_backup(
+    state_dir: &Path,
+    op: &Operation,
+    abs: &Path,
+    bytes: &[u8],
+    mode_on_create: u32,
+    journal: JournalFn,
+    failpoint: FailFn,
+) -> Result<(Option<String>, OpOutcome), ApplyError> {
+    // Backup the previous content when present.
+    let mut backup_sha: Option<String> = None;
+    match std::fs::read(abs) {
+        Ok(previous) => {
+            let sha = crate::backup::put(state_dir, &previous).map_err(ApplyError::Internal)?;
+            backup_sha = Some(sha.clone());
+            journal(PH_BACKUP, Some(&sha), Some("backup stored")).map_err(ApplyError::Internal)?;
+        }
+        Err(_) => {
+            journal(PH_BACKUP, None, Some("no previous file")).map_err(ApplyError::Internal)?;
+        }
+    }
+    failpoint(PH_BACKUP)?;
+
+    // Re-check symlink status immediately before write (TOCTOU narrowing).
+    if has_symlink_parent(abs) {
+        journal(
+            PH_FAILED,
+            None,
+            Some("symlink parent swapped in before write"),
+        )
+        .map_err(ApplyError::Internal)?;
+        return Err(ApplyError::Conflict(format!(
+            "{}: a parent directory became a symlink before write; refusing",
+            op.target
+        )));
+    }
+    if let Ok(m) = std::fs::symlink_metadata(abs) {
+        if m.file_type().is_symlink() {
+            journal(PH_FAILED, None, Some("symlink swapped in before write"))
+                .map_err(ApplyError::Internal)?;
+            return Err(ApplyError::Conflict(format!(
+                "{}: symlink appeared before write; refusing",
+                op.target
+            )));
+        }
+    }
+
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ApplyError::OpFailed {
+            op_id: op.id.clone(),
+            target: op.target.clone(),
+            message: format!("create {}: {e:?}", parent.display()),
+        })?;
+    }
+
+    let tmp = abs.with_extension("tmp-configctl");
+    std::fs::write(&tmp, bytes).map_err(|e| ApplyError::OpFailed {
+        op_id: op.id.clone(),
+        target: op.target.clone(),
+        message: format!("write temp file: {e:?}"),
+    })?;
+    if let Ok(f) = std::fs::File::open(&tmp) {
+        let _ = f.sync_all();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = match std::fs::symlink_metadata(abs) {
+            Ok(m) if m.file_type().is_file() => m.permissions().mode() & 0o7777,
+            _ => mode_on_create,
+        };
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode));
+    }
+    std::fs::rename(&tmp, abs).map_err(|e| ApplyError::OpFailed {
+        op_id: op.id.clone(),
+        target: op.target.clone(),
+        message: format!("atomic rename: {e:?}"),
+    })?;
+    if let Some(parent) = abs.parent() {
+        if let Ok(f) = std::fs::File::open(parent) {
+            let _ = f.sync_all();
+        }
+    }
+    // Postcheck: the file must now hold exactly the desired bytes.
+    let written = std::fs::read(abs).map_err(|e| ApplyError::OpFailed {
+        op_id: op.id.clone(),
+        target: op.target.clone(),
+        message: format!("postcheck read: {e:?}"),
+    })?;
+    if crate::hash::file_content_hash(&written) != op.desired_after.clone().unwrap_or_default() {
+        journal(PH_FAILED, None, Some("postcheck mismatch")).map_err(ApplyError::Internal)?;
+        return Err(ApplyError::OpFailed {
+            op_id: op.id.clone(),
+            target: op.target.clone(),
+            message: "postcheck: written content does not match the plan".into(),
+        });
+    }
+    journal(PH_POSTCHECK, backup_sha.as_deref(), Some("verified")).map_err(ApplyError::Internal)?;
+    journal(PH_DONE, backup_sha.as_deref(), Some("ok")).map_err(ApplyError::Internal)?;
+    failpoint(PH_DONE)?;
+    Ok((
+        backup_sha.clone(),
+        OpOutcome {
+            op_id: op.id.clone(),
+            target: op.target.clone(),
+            kind: format!("{:?}", op.kind),
+            result: "ok".into(),
+            backup_sha,
+        },
+    ))
+}
+
+/// v1.2: write the canonical managed shell env file.
+///
+/// Composed from the profile's `[environment]` literals — the same source of
+/// truth as `environment.d/90-configctl.conf` — so both artifacts always
+/// agree. Secret entries stay references and are never written here; the
+/// composed content is additionally screened for secret-like values and a
+/// trip is a hard error (defense in depth).
+#[allow(clippy::too_many_arguments)]
+fn execute_env_file_write(
+    state_dir: &Path,
+    plan_id: &str,
+    plan: &Plan,
+    loaded: &LoadedProfile,
+    home: &Path,
+    op: &Operation,
+    journal: JournalFn,
+    failpoint: FailFn,
+) -> Result<Option<OpOutcome>, ApplyError> {
+    journal(PH_INTENT, None, Some(&op.summary)).map_err(ApplyError::Internal)?;
+    failpoint(PH_INTENT)?;
+
+    let entries = crate::plan::canonical_env_entries(loaded);
+    if let Some(name) = crate::envmap::first_secret_like(&entries) {
+        journal(PH_FAILED, None, Some("secret-like value refused"))
+            .map_err(ApplyError::Internal)?;
+        return Err(ApplyError::Internal(format!(
+            "env file: refusing to write secret-like value {name} to the canonical shell env file"
+        )));
+    }
+    let desired = crate::envmap::canonical_env_file(&entries);
+    let abs = home.join(crate::envmap::CANONICAL_REL);
+
+    let current = std::fs::read(&abs).ok();
+    if current.as_deref() == Some(desired.as_bytes()) {
+        journal(PH_PRECHECK, None, Some("already current; noop")).map_err(ApplyError::Internal)?;
+        journal(PH_DONE, None, Some("noop")).map_err(ApplyError::Internal)?;
+        return Ok(Some(OpOutcome {
+            op_id: op.id.clone(),
+            target: op.target.clone(),
+            kind: format!("{:?}", op.kind),
+            result: "noop".into(),
+            backup_sha: None,
+        }));
+    }
+    guard_expected_before(op, current.as_deref(), "re-run `configctl env consolidate`")?;
+    journal(PH_PRECHECK, None, Some("differs")).map_err(ApplyError::Internal)?;
+    failpoint(PH_PRECHECK)?;
+
+    let (backup_sha, mut outcome) = atomic_write_with_backup(
+        state_dir,
+        op,
+        &abs,
+        desired.as_bytes(),
+        0o600,
+        journal,
+        failpoint,
+    )?;
+    let _ = crate::state::record_owned(
+        state_dir,
+        "envfile",
+        &op.target,
+        &plan.profile_identity,
+        Some(&crate::hash::file_content_hash(desired.as_bytes())),
+        crate::state::now_secs(),
+    );
+    let _ = crate::state::record_history(
+        state_dir,
+        Some(plan_id),
+        Some(&op.id),
+        "apply",
+        "ok",
+        Some(&op.target),
+        crate::state::now_secs(),
+    );
+    outcome.backup_sha = backup_sha;
+    Ok(Some(outcome))
+}
+
+/// v1.2: append the marker-delimited include block to a shell startup file.
+///
+/// Additive and marker-delimited, so it is class `SAFE_REPRODUCE` even though
+/// it changes shell startup: it is backed up, fully reversible, and never
+/// rewrites anything outside the two markers.
+#[allow(clippy::too_many_arguments)]
+fn execute_include_line_op(
+    state_dir: &Path,
+    plan_id: &str,
+    plan: &Plan,
+    home: &Path,
+    op: &Operation,
+    journal: JournalFn,
+    failpoint: FailFn,
+) -> Result<Option<OpOutcome>, ApplyError> {
+    journal(PH_INTENT, None, Some(&op.summary)).map_err(ApplyError::Internal)?;
+    failpoint(PH_INTENT)?;
+
+    crate::paths::validate_file_target(&op.target).map_err(ApplyError::Usage)?;
+    let abs = observe::expand_target(&op.target, home)
+        .ok_or_else(|| ApplyError::Usage(format!("invalid target {:?}", op.target)))?;
+    if has_symlink_parent(&abs) {
+        return Err(ApplyError::Conflict(format!(
+            "{}: a parent directory is a symlink; refusing",
+            op.target
+        )));
+    }
+    if let Ok(m) = std::fs::symlink_metadata(&abs) {
+        if m.file_type().is_symlink() {
+            return Err(ApplyError::Conflict(format!(
+                "{} is a symlink; refusing",
+                op.target
+            )));
+        }
+        if !m.file_type().is_file() {
+            return Err(ApplyError::Conflict(format!(
+                "{} is not a regular file; refusing",
+                op.target
+            )));
+        }
+        if m.len() > MAX_RC_BYTES {
+            return Err(ApplyError::Conflict(format!(
+                "{} is larger than {MAX_RC_BYTES} bytes; refusing to rewrite it",
+                op.target
+            )));
+        }
+    }
+
+    let current = std::fs::read(&abs).ok();
+    guard_expected_before(op, current.as_deref(), "re-run `configctl env consolidate`")?;
+
+    let current_str = current
+        .as_ref()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    let updated = crate::envmap::ensure_include_block(&current_str);
+    if updated == current_str {
+        journal(PH_PRECHECK, None, Some("already present; noop")).map_err(ApplyError::Internal)?;
+        journal(PH_DONE, None, Some("noop")).map_err(ApplyError::Internal)?;
+        return Ok(Some(OpOutcome {
+            op_id: op.id.clone(),
+            target: op.target.clone(),
+            kind: format!("{:?}", op.kind),
+            result: "noop".into(),
+            backup_sha: None,
+        }));
+    }
+    journal(PH_PRECHECK, None, Some("include block missing")).map_err(ApplyError::Internal)?;
+    failpoint(PH_PRECHECK)?;
+
+    let (backup_sha, mut outcome) = atomic_write_with_backup(
+        state_dir,
+        op,
+        &abs,
+        updated.as_bytes(),
+        0o644,
+        journal,
+        failpoint,
+    )?;
+    let _ = crate::state::record_owned(
+        state_dir,
+        "rcfile",
+        &op.target,
+        &plan.profile_identity,
+        Some(&crate::hash::file_content_hash(updated.as_bytes())),
+        crate::state::now_secs(),
+    );
+    let _ = crate::state::record_history(
+        state_dir,
+        Some(plan_id),
+        Some(&op.id),
+        "apply",
+        "ok",
+        Some(&op.target),
+        crate::state::now_secs(),
+    );
+    outcome.backup_sha = backup_sha;
+    Ok(Some(outcome))
+}
+
 /// Parse managed-env file bytes into a `KEY → VALUE` map.
 ///
 /// Shared by apply (postchecks) and rollback (like-for-like guards) so both
@@ -1193,6 +1524,10 @@ fn has_symlink_parent(abs: &Path) -> bool {
         match std::fs::symlink_metadata(p) {
             Ok(m) if m.file_type().is_symlink() => return true,
             Ok(_) => {}
+            // A non-existent ancestor cannot be a symlink; apply creates it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Anything else (permission denied, I/O error) is unknowable:
+            // fail closed rather than guessing.
             Err(_) => return true,
         }
         cur = p.parent();

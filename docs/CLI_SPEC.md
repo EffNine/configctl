@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain` and `env consolidate` (preview).** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain` and `env consolidate` (journaled plan).** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -366,7 +366,7 @@ configctl env scan [PATH...] [--json]
 configctl env list [--project <P>] [--json]
 configctl env verify [NAME] [--project <P>] [--schema <FILE>] [--strict] [--json]
 configctl env explain [--home <DIR>] [--json]
-configctl env consolidate [--var <NAME>]... [--mode include|move] [--dry-run] [--home <DIR>] [--json]
+configctl env consolidate [PROFILE] [--mode include|move] [--dry-run] [--home <DIR>] [--json]
 ```
 
 `env explain` (v1.2) maps where environment declarations live under `$HOME`
@@ -378,13 +378,16 @@ expansion-bearing), `secret`, or `structure`; values of secret-like variables
 are never retained. It reports conflicts and the effective precedence, and is
 read-only (exit 0, exit 2 only when `$HOME` is unknown).
 
-`env consolidate` (v1.2, phase E1) is **preview-only**: with `--dry-run` it
-shows the canonical `~/.config/configctl/env.sh` content, the marker include
-block that would be appended to each participating rc file, and a shadowing
-report. It writes nothing. Conflicting unmanaged values must be resolved with
-`--var NAME` (exit 5 otherwise); without `--dry-run` it reports the
-unimplemented write engine (phase E2) and exits 2. See
-[ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
+`env consolidate` (v1.2) turns the profile's `[environment]` literals into a
+journaled plan: one `EnvFileWrite` for the canonical
+`~/.config/configctl/env.sh` and one marker `IncludeLineAdd` per shell startup
+file that already declares a managed variable. With `--dry-run` it prints the
+exact change and writes nothing (not even a plan). Otherwise it persists the
+plan and stops; the mutation happens only through `configctl apply` (approval,
+journal, backup, rollback). Secret entries are never written to the canonical
+file, and `expected_before` guards make apply refuse a plan whose target
+changed since planning (exit 5). `--mode move` (assisted manual removal) is not
+implemented (exit 2). See [ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
 
 `env verify` reports missing/invalid/unknown variables per the project schema
 (see PROFILE_SCHEMA.md §4.2). Exit 3 on errors.
@@ -602,6 +605,7 @@ Apply 6 operations to this machine? [y/N]
 | `rollback`, `doctor` (recovery) | P7 |
 | hardening, JSON stability, RC | P8 |
 | `env explain`, `env consolidate --dry-run` | v1.2 E1 |
+| `env consolidate` (plan → apply → rollback), `verify` `envfile` provider | v1.2 E2 |
 
 `profile migrate` supports `--to 1` only (v1 is the sole schema; already-
 current profiles report no-op). `secrets set` reads via hidden prompt or

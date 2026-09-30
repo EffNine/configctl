@@ -219,6 +219,39 @@ pub fn verify(loaded: &LoadedProfile, observed: &ObservedState) -> VerifyReport 
                 },
             }
         }
+
+        // v1.2: when the canonical managed shell env file exists, the same
+        // literals must be present there too — both artifacts are generated
+        // from this one profile. Absence of the file is not drift; shell
+        // consolidation is opt-in.
+        if observed.envfile_present {
+            let mut names: Vec<&String> = env.keys().collect();
+            names.sort();
+            for name in names {
+                if let EnvLiteral::Value(lit) = &env[name.as_str()] {
+                    match observed.envfile_literals.get(name) {
+                        Some(cur) if cur == lit => results.push(check(
+                            "envfile",
+                            name,
+                            CheckStatus::Match,
+                            "managed shell env file matches",
+                        )),
+                        Some(_) => results.push(check(
+                            "envfile",
+                            name,
+                            CheckStatus::Drift,
+                            "managed shell env file differs",
+                        )),
+                        None => results.push(check(
+                            "envfile",
+                            name,
+                            CheckStatus::Missing,
+                            "not set in the managed shell env file",
+                        )),
+                    }
+                }
+            }
+        }
     }
     if let Some(manifest) = &loaded.manifest {
         let mut refs: Vec<&crate::profile::SecretEntry> = manifest.secrets.iter().collect();

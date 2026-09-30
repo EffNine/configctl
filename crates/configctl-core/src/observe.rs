@@ -54,6 +54,15 @@ pub struct ObservedState {
     pub secret_exists: BTreeMap<String, Option<bool>>,
     /// Literal env entries read from the managed env file (name → value).
     pub env_literals: BTreeMap<String, String>,
+    /// Literal env entries read from the canonical managed shell env file
+    /// (`~/.config/configctl/env.sh`, v1.2); empty when it is absent.
+    pub envfile_literals: BTreeMap<String, String>,
+    /// True when the canonical managed shell env file exists.
+    ///
+    /// Deliberately *not* part of [`fingerprint`]: env-consolidation plans
+    /// carry exact per-operation `expected_before` guards instead, so adding
+    /// this field must not perturb existing plan hashes.
+    pub envfile_present: bool,
 }
 
 /// Expand a `~/...` target against `home`. Returns `None` when the target is
@@ -192,6 +201,22 @@ pub fn observe(
         for n in env_names {
             if let Some(v) = current.get(n) {
                 st.env_literals.insert(n.clone(), v.clone());
+            }
+        }
+    }
+
+    // Canonical managed shell env file (v1.2). Read-only and bounded; a
+    // symlink or oversized file is reported as absent rather than followed.
+    {
+        let env_file = home.join(crate::envmap::CANONICAL_REL);
+        if let Ok(meta) = std::fs::symlink_metadata(&env_file) {
+            if meta.file_type().is_file() && meta.len() <= 64 * 1024 {
+                if let Ok(bytes) = std::fs::read(&env_file) {
+                    st.envfile_present = true;
+                    if let Some(map) = crate::apply::parse_env_bytes(&bytes) {
+                        st.envfile_literals = map;
+                    }
+                }
             }
         }
     }

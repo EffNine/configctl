@@ -32,6 +32,7 @@ pub fn support_of(op: &Operation) -> RollbackSupport {
     match op.kind {
         OperationKind::FileCreate | OperationKind::FileUpdate => RollbackSupport::Supported,
         OperationKind::EnvironmentSchemaChange => RollbackSupport::Supported,
+        OperationKind::EnvFileWrite | OperationKind::IncludeLineAdd => RollbackSupport::Supported,
         OperationKind::PackageInstall
         | OperationKind::PackageVersionMismatch
         | OperationKind::Unsupported
@@ -440,11 +441,7 @@ fn rollback_file_op(
             atomic_restore(&abs, &bytes)?;
             // Update ownership fingerprint to the restored content.
             let fp = crate::hash::file_content_hash(&bytes);
-            let kind = if op.kind == OperationKind::EnvironmentSchemaChange {
-                "env"
-            } else {
-                "file"
-            };
+            let kind = op.kind_name();
             let _ = crate::state::record_owned(
                 state_dir,
                 kind,
@@ -700,6 +697,8 @@ impl KindName for Operation {
                 "file"
             }
             OperationKind::EnvironmentSchemaChange => "env",
+            OperationKind::EnvFileWrite => "envfile",
+            OperationKind::IncludeLineAdd => "rcfile",
             OperationKind::ServiceEnable | OperationKind::ServiceDisable => "service",
             OperationKind::GitConfigChange => "git",
             OperationKind::NoOp => "noop",

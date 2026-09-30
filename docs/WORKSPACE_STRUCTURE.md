@@ -52,6 +52,7 @@ configctl/
 │   │       ├── classify.rs         # v1.1: classes + PlanActionClass
 │   │       ├── capture_policy.rs   # v1.1: capture action decisions
 │   │       ├── hash.rs             # canonical SHA-256
+│   │       ├── envmap.rs           # v1.2: shell env source map + composers
 │   │       └── redact.rs / envfile.rs / paths.rs / files.rs / ...
 │   └── configctl-discovery/        # bounded walkers, detectors, scanner
 └── target/                         # build artifacts (gitignored)

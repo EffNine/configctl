@@ -6,7 +6,7 @@ semantic. Dates are ISO-8601.
 
 ## [Unreleased] — 1.2.0-dev
 
-Environment consolidation (v1.2), phase E1.
+Environment consolidation (v1.2), phases E1–E2.
 
 ### Added
 
@@ -16,16 +16,26 @@ Environment consolidation (v1.2), phase E1.
   non-evaluating parser. Lines are classified `managed`/`special`/`manual`/
   `secret`/`structure`; secret-like values are never retained. Reports
   conflicts and effective precedence. Backed by a new `configctl_core::envmap`
-  module (17 unit tests) and an e2e canary test.
-- `configctl env consolidate --dry-run` / `--var NAME` — previews the canonical
-  `~/.config/configctl/env.sh` content and the marker include block that would
-  be appended to each participating rc file, plus a shadowing report. Writes
-  nothing yet (the journaled write engine is phase E2).
+  module and an e2e canary test.
+- `configctl env consolidate` — plans (and, with `--dry-run`, previews) one
+  managed shell env file plus a marker include block per participating shell
+  startup file. The plan is applied through the normal journaled `apply` path
+  and undone by `rollback`; `expected_before` guards make apply refuse a stale
+  plan instead of overwriting a hand edit. Secret entries never reach the
+  canonical file, which is additionally screened for secret-like values.
+- Two new plan operation kinds, `EnvFileWrite` and `IncludeLineAdd`, both
+  `SAFE_REPRODUCE`, backed up, and rollback-supported (byte-exact restore).
+- `verify` checks the canonical shell env file under a new `envfile` provider
+  when it exists; `plan` renders an "Environment (shell files)" group.
+- `env consolidate` also keeps `~/.config/environment.d/90-configctl.conf` in
+  sync from the same profile data, so both env artifacts land in one plan.
 
 ### Changed
 
 - Renamed the core scan-view adapter module `configctl_discovery_stub` →
   `scan_view` so its name no longer implies a core→discovery dependency.
+- `has_symlink_parent` now distinguishes a non-existent ancestor (cannot be a
+  symlink; apply creates it) from an unknowable one (still fails closed).
 
 ## [1.1.0] — 2026-09-30
 

@@ -41,6 +41,13 @@ pub enum OperationKind {
     FileUpdate,
     FileConflict,
     EnvironmentSchemaChange,
+    /// v1.2: write the canonical managed shell env file
+    /// (`~/.config/configctl/env.sh`), composed from the profile's
+    /// `[environment]` literals.
+    EnvFileWrite,
+    /// v1.2: append the marker-delimited include block to a shell startup
+    /// file so it reads the canonical managed env file.
+    IncludeLineAdd,
     ServiceEnable,
     ServiceDisable,
     GitConfigChange,
@@ -94,6 +101,8 @@ fn class_for_kind(kind: &OperationKind) -> PlanActionClass {
         | OperationKind::FileCreate
         | OperationKind::FileUpdate
         | OperationKind::EnvironmentSchemaChange
+        | OperationKind::EnvFileWrite
+        | OperationKind::IncludeLineAdd
         | OperationKind::ServiceEnable
         | OperationKind::ServiceDisable
         | OperationKind::GitConfigChange => PlanActionClass::SafeReproduce,
@@ -729,6 +738,8 @@ pub fn executable_ops(plan: &Plan) -> Vec<&Operation> {
                     | OperationKind::FileCreate
                     | OperationKind::FileUpdate
                     | OperationKind::EnvironmentSchemaChange
+                    | OperationKind::EnvFileWrite
+                    | OperationKind::IncludeLineAdd
                     | OperationKind::ServiceEnable
                     | OperationKind::ServiceDisable
                     | OperationKind::GitConfigChange
@@ -783,10 +794,221 @@ fn kind_rank(k: &OperationKind) -> u8 {
         OperationKind::FileUpdate => 4,
         OperationKind::FileConflict => 5,
         OperationKind::EnvironmentSchemaChange => 6,
-        OperationKind::ServiceEnable => 7,
-        OperationKind::ServiceDisable => 8,
-        OperationKind::GitConfigChange => 9,
-        OperationKind::NoOp => 10,
-        OperationKind::Unsupported => 11,
+        OperationKind::EnvFileWrite => 7,
+        OperationKind::IncludeLineAdd => 8,
+        OperationKind::ServiceEnable => 9,
+        OperationKind::ServiceDisable => 10,
+        OperationKind::GitConfigChange => 11,
+        OperationKind::NoOp => 12,
+        OperationKind::Unsupported => 13,
     }
+}
+
+// ---------------------------------------------------------------------------
+// v1.2 env consolidation plan (E2)
+// ---------------------------------------------------------------------------
+
+/// Provider label for the managed shell env artifacts.
+pub const ENVFILE_PROVIDER: &str = "envfile";
+
+/// One participating shell startup file and its current content.
+#[derive(Debug, Clone)]
+pub struct RcTarget {
+    /// `~/...` locator.
+    pub target: String,
+    /// Current file content; `None` when the file does not exist yet.
+    pub current: Option<Vec<u8>>,
+}
+
+/// The `NAME=VALUE` pairs the canonical managed env file should contain:
+/// every non-secret literal in the profile's `[environment]` section.
+///
+/// Secret entries (`secret://…` references) are never written to the
+/// canonical file — they stay references.
+pub fn canonical_env_entries(loaded: &LoadedProfile) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = loaded
+        .profile
+        .environment
+        .as_ref()
+        .map(|env| {
+            env.iter()
+                .filter_map(|(k, v)| match v {
+                    EnvLiteral::Value(lit) => Some((k.clone(), lit.clone())),
+                    EnvLiteral::Secret { .. } => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// Build the v1.2 env-consolidation plan: one `EnvFileWrite` for the canonical
+/// managed shell env file plus one `IncludeLineAdd` per participating rc file.
+///
+/// Deterministic and pure. `canonical_current` / `RcTarget::current` are the
+/// bytes observed at plan time; they become the `expected_before` guards that
+/// make apply refuse a stale plan (TOCTOU).
+///
+/// A file that already carries the marker block is a no-op (idempotency). A
+/// file carrying a foreign or partial marker block is a blocking conflict:
+/// configctl refuses rather than guessing how to merge it.
+pub fn build_env_consolidation_plan(
+    loaded: &LoadedProfile,
+    rc_files: &[RcTarget],
+    canonical_current: Option<&[u8]>,
+    envd_current: Option<&BTreeMap<String, String>>,
+    warnings: Vec<PlanWarning>,
+    plan_id: &str,
+    created_at: i64,
+) -> Plan {
+    let mut operations: Vec<Operation> = Vec::new();
+    let mut warnings = warnings;
+    let mut conflicts: Vec<Conflict> = Vec::new();
+
+    let entries = canonical_env_entries(loaded);
+    if entries.is_empty() {
+        warnings.push(PlanWarning {
+            code: "no_environment".into(),
+            message: "profile has no [environment] literals to consolidate".into(),
+        });
+    } else {
+        let desired = crate::envmap::canonical_env_file(&entries);
+        let desired_hash = crate::hash::file_content_hash(desired.as_bytes());
+        let expected_before = canonical_current
+            .map(crate::hash::file_content_hash)
+            .filter(|h| *h != desired_hash);
+        if expected_before.is_some() || canonical_current.is_none() {
+            operations.push(mk_op(
+                ENVFILE_PROVIDER,
+                OperationKind::EnvFileWrite,
+                &format!("~/{}", crate::envmap::CANONICAL_REL),
+                format!(
+                    "env file: manage {} setting(s) in the canonical shell env file",
+                    entries.len()
+                ),
+                "medium",
+                expected_before,
+                Some(desired_hash),
+                RollbackSupport::Supported,
+            ));
+        }
+
+        // Keep the session/services artifact in sync from the same profile
+        // data: one `EnvironmentSchemaChange` per differing literal. This is
+        // the existing v1.0 mechanism for
+        // `~/.config/environment.d/90-configctl.conf`, emitted here so both
+        // env artifacts land in one plan and `verify` passes for both.
+        for (name, lit) in &entries {
+            let cur = envd_current.and_then(|m| m.get(name));
+            if cur.map(|v| v.as_str()) == Some(lit.as_str()) {
+                continue;
+            }
+            let mut details = BTreeMap::new();
+            details.insert("variable".into(), name.clone());
+            details.insert("desired_hash".into(), crate::hash::env_value_hash(lit));
+            let mut op = mk_op(
+                "env",
+                OperationKind::EnvironmentSchemaChange,
+                name,
+                format!("env {name}: set literal in managed env file"),
+                "low",
+                cur.map(|v| crate::hash::env_value_hash(v)),
+                Some(crate::hash::env_value_hash(lit)),
+                RollbackSupport::Supported,
+            );
+            op.details = details;
+            operations.push(op);
+        }
+    }
+
+    let mut sorted: Vec<&RcTarget> = rc_files.iter().collect();
+    sorted.sort_by(|a, b| a.target.cmp(&b.target));
+    for rc in sorted {
+        let current_str = rc
+            .current
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+        if crate::envmap::has_include_block(&current_str) {
+            // Idempotent: an existing (even partial) marker block is never
+            // rewritten behind the user's back.
+            continue;
+        }
+        let updated = crate::envmap::ensure_include_block(&current_str);
+        operations.push(mk_op(
+            ENVFILE_PROVIDER,
+            OperationKind::IncludeLineAdd,
+            &rc.target,
+            format!(
+                "shell startup: read the managed env file from {}",
+                rc.target
+            ),
+            "medium",
+            rc.current
+                .as_ref()
+                .map(|b| crate::hash::file_content_hash(b.as_slice())),
+            Some(crate::hash::file_content_hash(updated.as_bytes())),
+            RollbackSupport::Supported,
+        ));
+    }
+
+    operations.sort_by(|a, b| {
+        (provider_rank(&a.provider), &a.target, kind_rank(&a.kind)).cmp(&(
+            provider_rank(&b.provider),
+            &b.target,
+            kind_rank(&b.kind),
+        ))
+    });
+    for (i, op) in operations.iter_mut().enumerate() {
+        op.id = format!("op-{:04}", i + 1);
+    }
+    warnings.sort_by(|a, b| (&a.code, &a.message).cmp(&(&b.code, &b.message)));
+    conflicts.sort_by(|a, b| (&a.target, &a.code).cmp(&(&b.target, &b.code)));
+
+    if operations.is_empty() {
+        operations.push(mk_op(
+            "core",
+            OperationKind::NoOp,
+            "noop",
+            "no changes required".into(),
+            "low",
+            None,
+            None,
+            RollbackSupport::Supported,
+        ));
+        operations[0].id = "op-0001".into();
+    }
+
+    let mut plan = Plan {
+        schema_version: PLAN_SCHEMA_VERSION,
+        plan_id: plan_id.to_string(),
+        profile_identity: loaded.identity.clone(),
+        profile_hash: loaded.profile_hash.clone(),
+        // Env-consolidation plans are guarded per-operation by
+        // `expected_before` (the exact bytes observed at plan time), so the
+        // plan-level observed fingerprint is the composition of those guards
+        // rather than a whole-machine snapshot.
+        observed_state_fingerprint: crate::hash::sha256_str(
+            &operations
+                .iter()
+                .map(|o| {
+                    format!(
+                        "{}|{}|{}",
+                        o.target,
+                        o.expected_before.clone().unwrap_or_default(),
+                        o.desired_after.clone().unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        created_at,
+        operations,
+        warnings,
+        conflicts,
+        plan_hash: String::new(),
+    };
+    plan.plan_hash = compute_plan_hash(&plan);
+    plan
 }

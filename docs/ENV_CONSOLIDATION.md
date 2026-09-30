@@ -1,11 +1,13 @@
 # ENV_CONSOLIDATION.md — user-driven environment consolidation
 
-Status: **Phase E1 implemented (v1.2); E2+ proposed.** Mode 1 (`configctl env
-explain`) is implemented, and `configctl env consolidate --dry-run` previews
-mode 2 (canonical file + include block). The journaled write engine (phase E2),
-mode 3 (E5), and `onboard` (E4) are not implemented yet; see §13. Current
-behavior otherwise: `capture` records non-secret environment literals in the
-profile, and `apply` writes them to `~/.config/environment.d/90-configctl.conf`
+Status: **Phases E1–E2 implemented (v1.2).** `configctl env explain` (mode 1,
+read-only) and `configctl env consolidate` — which persists a journaled plan
+writing the canonical `~/.config/configctl/env.sh` plus one marker include
+block per participating rc file, applied through the normal `apply` and undone
+by `rollback` — are implemented. Mode 3 (`--mode move`, phase E5) and
+`onboard` (phase E4) are not implemented yet; see §13. Current behavior
+otherwise: `capture` records non-secret environment literals in the profile,
+and `apply` writes them to `~/.config/environment.d/90-configctl.conf`
 (see `APPLY.md`). This document specifies how configctl can additionally find
 environment declarations scattered across shell startup files, explain them in
 plain language, and — only with explicit approval — consolidate them into one
@@ -222,9 +224,9 @@ never values when secret), `data.conflicts[]`, `data.precedence[]`.
 
 | Mode | CLI | Engine work | Risk class |
 |---|---|---|---|
-| 1 observe/explain | `env explain` | parser + report | none (read-only) |
-| 2 canonical + include | `env consolidate --mode include` | two op kinds, both backed up and rollback-supported | medium |
-| 3 move/remove | `env consolidate --mode move` | **no new engine op**: emits an assisted manual patch + backup | high → deliberately manual |
+| 1 observe/explain | `env explain` | parser + report | none (read-only) — **implemented** |
+| 2 canonical + include | `env consolidate` | two op kinds, both backed up and rollback-supported | medium — **implemented** |
+| 3 move/remove | `env consolidate --mode move` | **no new engine op**: emits an assisted manual patch + backup | high → deliberately manual — **not implemented (E5)** |
 
 ---
 
@@ -260,8 +262,10 @@ The user picks which files get the block; the default for beginners is
   shadowing report: "old line in `~/.bashrc:42` is now overridden by the
   managed value `vim`". No automatic removal (mode 3 handles that).
 - If two *unmanaged* sources define the same variable with different values,
-  `env explain` lists the conflict; `env consolidate` refuses to pick one and
-  requires `--var NAME` selection (or `--keep-last`, explicit).
+  `env explain` lists the conflict. `env consolidate` does not guess: the
+  profile's `[environment]` value is the explicit choice, and every site that
+  still declares the variable is reported as a non-blocking
+  `shadowed_declaration` plan warning naming the file and line.
 
 ### 6.4 PATH and other special variables
 
@@ -340,7 +344,7 @@ is read-only apart from writing the profile bundle.
 | Command | Purpose |
 |---|---|
 | `configctl env explain [--json] [--home DIR]` | mode 1 report |
-| `configctl env consolidate [--mode include\|move] [--var NAME]… [--dry-run] [--emit-patch FILE] [--json]` | modes 2/3 |
+| `configctl env consolidate [--mode include\|move] [--dry-run] [--home DIR] [--json] [PROFILE]` | modes 2/3 |
 | `configctl env verify [--system]` | extend existing verify: canonical file hash, include blocks present, shadowed declarations reported |
 | `configctl onboard` | guided first run (§8) |
 | `configctl status` | one-line summary across profile + env (`verify` rollup) |
@@ -353,17 +357,22 @@ exit 0 with empty data when nothing is found.
 
 ---
 
-## 10. Verification semantics (honest version)
+## 10. Verification semantics (implemented state)
 
-- File-level: canonical file content hash matches the profile; include block
-  present and byte-identical in each chosen rc file; no duplicate foreign
-  markers.
-- Value-level: canonical values equal the profile's `[environment]`.
-- Shadowing: report declarations that still override managed values (mode 2),
-  and whether mode 3 removals have been applied.
-- Session-level (not possible to verify from outside a shell): the tool does
-  not claim to know what your current terminal sees. `env explain` computes
-  the *expected* precedence from file order and says so explicitly.
+- File-level (**implemented**): the canonical file content hash matches the
+  profile, and include blocks are present and byte-identical in each planned
+  rc file — enforced by plan `expected_before`/`desired_after` guards at apply
+  time and by rollback's file-content identity guard.
+- Value-level (**implemented**): canonical values equal the profile's
+  `[environment]`; `verify` reports findings under the `envfile` provider when
+  the canonical file exists, alongside the existing `env` (session artifact)
+  provider.
+- Shadowing (**implemented as reporting**): `env consolidate` emits one
+  `shadowed_declaration` warning per still-declared site; automatic removal is
+  mode 3 (not implemented).
+- Session-level (**not claimed**): the tool does not claim to know what your
+  current terminal sees. `env explain` computes the *expected* precedence from
+  the documented file read order and says so explicitly.
 
 ---
 
@@ -374,7 +383,7 @@ exit 0 with empty data when nothing is found.
 | T21 | Malicious/incorrect rc edit breaks login shell | additive marker block only; backup; rollback; no evaluator |
 | T22 | Value sneaks a secret into the canonical file | existing detector at capture + hard error before write |
 | T23 | Precedence claim causes wrong value to win | explicit shadowing report; managed block at end; conflicts refuse to auto-pick |
-| T24 | TOCTOU on rc file between plan and apply | existing hash guard + stale-plan refusal; apply re-reads and verifies before write |
+| T24 | TOCTOU on rc file between plan and apply | existing hash guard + stale-plan refusal; apply re-reads and verifies `expected_before` per operation before write |
 | T25 | Symlinked rc target attacks | existing symlink refusal at managed targets applies unchanged |
 
 ---
@@ -399,7 +408,7 @@ exit 0 with empty data when nothing is found.
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
 | E1 ✅ | `env explain` (parser + human/JSON report) | delivered in v1.2: core `envmap` parser + 17 unit tests, `env explain` human/JSON, `env consolidate --dry-run` preview, e2e canary clean |
-| E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | idempotency + rollback tests green; redaction canary clean |
+| E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | delivered in v1.2: both kinds wired end to end (`SAFE_REPRODUCE`, backed up, rollback byte-exact), `expected_before` TOCTOU guards, canonical file + `environment.d` kept in sync from one profile, `verify` checks the canonical file (`envfile` provider); idempotency + stale-plan refusal + rollback tests green |
 | E3 | `env consolidate` CLI + shadowing report | e2e on messy fixture home |
 | E4 | `onboard` + `status` + `why` + `undo`/`--last` | beginner script walkthrough; docs updated |
 | E5 | mode 3 assisted manual (patch emission) + threat review | design sign-off; opt-in only |

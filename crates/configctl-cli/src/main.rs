@@ -345,11 +345,10 @@ enum EnvCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Preview consolidating env settings into one managed file (dry-run only)
+    /// Plan (or preview) one managed shell env file from the profile
     Consolidate {
-        /// Only consolidate these variables (repeatable)
-        #[arg(long = "var", value_name = "NAME")]
-        var: Vec<String>,
+        #[arg(value_name = "PROFILE")]
+        profile: Option<String>,
         /// include (canonical file + rc include block) or move (assisted)
         #[arg(long, default_value = "include")]
         mode: String,
@@ -981,17 +980,18 @@ fn run(cli: Cli) -> ExitCode {
                 finish(out.exit_code as u8)
             }
             EnvCmd::Consolidate {
-                var,
+                profile,
                 mode,
                 dry_run,
                 home,
                 json,
             } => {
                 let out = env::run_env_consolidate(
-                    var,
-                    mode,
-                    *dry_run,
+                    profile.as_deref(),
+                    cli.state_dir.as_deref(),
                     home.as_deref().map(std::path::Path::new),
+                    *dry_run,
+                    mode,
                 );
                 if let Some(e) = &out.error {
                     if *json {

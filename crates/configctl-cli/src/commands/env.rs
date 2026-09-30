@@ -7,7 +7,7 @@
 use configctl_core::command::CommandRunner;
 use configctl_core::profile_load::{self, LoadedProfile};
 use configctl_core::secrets::{SecretBackend, SecretToolBackend};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -497,19 +497,94 @@ fn consolidate_err(msg: &str, exit_code: i32) -> EnvConsolidateOutput {
     }
 }
 
-/// Plan (and, for now, only preview) consolidation of environment settings
-/// into the canonical managed file plus per-rc include blocks.
+/// Everything the consolidation plan needs, computed once so the preview and
+/// the plan describe exactly the same change.
+struct ConsolidationInputs {
+    rc_targets: Vec<configctl_core::plan::RcTarget>,
+    canonical_current: Option<Vec<u8>>,
+    envd_current: Option<BTreeMap<String, String>>,
+    warnings: Vec<configctl_core::plan::PlanWarning>,
+    /// Human lines for the shadowing report (names and locations only).
+    shadowed: Vec<String>,
+}
+
+fn consolidation_inputs(home: &Path, loaded: &LoadedProfile) -> ConsolidationInputs {
+    let names: BTreeSet<String> = configctl_core::plan::canonical_env_entries(loaded)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    let map = build_env_source_map(home);
+
+    let mut rc_targets: Vec<configctl_core::plan::RcTarget> = Vec::new();
+    let mut warnings: Vec<configctl_core::plan::PlanWarning> = Vec::new();
+    let mut shadowed: Vec<String> = Vec::new();
+
+    for src in &map.sources {
+        // Only shell startup files participate; environment.d already exists
+        // for the session/services side and is written by the normal apply
+        // path from the same profile data.
+        if !src.kind.participates_default() || src.kind == SourceKind::EnvironmentD {
+            continue;
+        }
+        let declares_selected = src
+            .declarations
+            .iter()
+            .any(|d| d.class == LineClass::Managed && names.contains(d.name.as_str()));
+        for d in &src.declarations {
+            if d.class == LineClass::Managed && names.contains(d.name.as_str()) {
+                shadowed.push(format!("{}:{} {}", src.path, d.line, d.name));
+                warnings.push(configctl_core::plan::PlanWarning {
+                    code: "shadowed_declaration".into(),
+                    message: format!(
+                        "{}:{} {} is still declared here; the managed block overrides it in this file",
+                        src.path, d.line, d.name
+                    ),
+                });
+            }
+        }
+        if !declares_selected {
+            continue;
+        }
+        let Some(rel) = src.kind.rel_path() else {
+            continue;
+        };
+        let abs = home.join(rel);
+        let current = std::fs::read(&abs).ok();
+        rc_targets.push(configctl_core::plan::RcTarget {
+            target: format!("~/{rel}"),
+            current,
+        });
+    }
+
+    let canonical_current = std::fs::read(home.join(envmap::CANONICAL_REL)).ok();
+    // Current session/services artifact (written by the normal apply path).
+    let envd_current = std::fs::read(home.join(configctl_core::apply::MANAGED_ENV_REL))
+        .ok()
+        .and_then(|b| configctl_core::apply::parse_env_bytes(&b));
+    ConsolidationInputs {
+        rc_targets,
+        canonical_current,
+        envd_current,
+        warnings,
+        shadowed,
+    }
+}
+
+/// `env consolidate` — turn the profile's `[environment]` literals into a
+/// journaled plan that writes the canonical managed shell env file plus one
+/// marker include block per participating rc file.
 ///
-/// The write path is phase E2 in `docs/ENV_CONSOLIDATION.md`: it must go
-/// through the plan → hash-bound approval → journal → backup → rollback
-/// engine, which is not wired for these op kinds yet. This command therefore
-/// performs no writes; without `--dry-run` it reports the unimplemented
-/// milestone rather than mutating anything.
+/// With `--dry-run` it prints the exact change and writes nothing (not even a
+/// plan). Otherwise it persists a plan and stops there: the mutation happens
+/// only through `configctl apply`, with the usual approval, journal, backup,
+/// and rollback guarantees.
+#[allow(clippy::too_many_arguments)]
 pub fn run_env_consolidate(
-    vars: &[String],
-    mode: &str,
-    dry_run: bool,
+    profile_arg: Option<&str>,
+    state_dir_arg: Option<&str>,
     home_override: Option<&Path>,
+    dry_run: bool,
+    mode: &str,
 ) -> EnvConsolidateOutput {
     if mode == "move" {
         return consolidate_err(
@@ -520,12 +595,15 @@ pub fn run_env_consolidate(
     if mode != "include" {
         return consolidate_err("--mode must be 'include' (or 'move')", 2);
     }
-    if !dry_run {
-        return consolidate_err(
-            "env consolidate writes are not implemented until phase E2; re-run with --dry-run to preview",
-            2,
-        );
-    }
+
+    let profile_dir = match super::common::resolve_profile_default(profile_arg) {
+        Ok(d) => d,
+        Err(e) => return consolidate_err(&e, 2),
+    };
+    let loaded: LoadedProfile = match profile_load::load_profile_dir(&profile_dir) {
+        Ok(l) => l,
+        Err(e) => return consolidate_err(&e, 2),
+    };
 
     let home: PathBuf = match home_override {
         Some(h) => h.to_path_buf(),
@@ -535,125 +613,76 @@ pub fn run_env_consolidate(
         },
     };
 
-    let map = build_env_source_map(&home);
-    let effective = map.effective();
+    let inputs = consolidation_inputs(&home, &loaded);
+    let entries = configctl_core::plan::canonical_env_entries(&loaded);
 
-    for v in vars {
-        if !effective.contains_key(v) {
-            return consolidate_err(
-                &format!("variable {v} is not a consolidatable setting (no managed value found)"),
-                2,
+    if dry_run {
+        let canonical = envmap::canonical_env_file(&entries);
+        let block = envmap::include_block();
+        let mut text = String::new();
+        text.push_str("Dry run — nothing will be written.\n\n");
+        text.push_str(&format!("Canonical file ~/{}:\n", envmap::CANONICAL_REL));
+        for line in canonical.lines() {
+            text.push_str(&format!("  {line}\n"));
+        }
+        if inputs.rc_targets.is_empty() {
+            text.push_str(
+                "\nNo shell startup file declares a managed setting; no include block is needed.\n",
             );
-        }
-    }
-
-    let selected: Vec<(String, String)> = if vars.is_empty() {
-        effective
-            .iter()
-            .map(|(k, (v, _))| (k.clone(), v.clone()))
-            .collect()
-    } else {
-        vars.iter()
-            .filter_map(|v| effective.get(v).map(|(val, _)| (v.clone(), val.clone())))
-            .collect()
-    };
-
-    // §6.3: two unmanaged sources with different values require --var selection.
-    let conflicts = map.conflicts();
-    let unresolved: Vec<String> = conflicts
-        .iter()
-        .filter(|c| selected.iter().any(|(k, _)| k == &c.name))
-        .map(|c| c.name.clone())
-        .collect();
-    if !unresolved.is_empty() && vars.is_empty() {
-        return consolidate_err(
-            &format!(
-                "conflicting variables need an explicit choice with --var: {}",
-                unresolved.join(", ")
-            ),
-            5,
-        );
-    }
-
-    // Compose the canonical file and the include-block list.
-    let canonical = envmap::canonical_env_file(&selected);
-    let selected_names: BTreeSet<&str> = selected.iter().map(|(k, _)| k.as_str()).collect();
-    let mut include_targets: Vec<String> = Vec::new();
-    for src in &map.sources {
-        if !src.kind.participates_default() || src.kind == SourceKind::EnvironmentD {
-            continue;
-        }
-        let declares_selected = src
-            .declarations
-            .iter()
-            .any(|d| d.class == LineClass::Managed && selected_names.contains(d.name.as_str()));
-        if declares_selected {
-            include_targets.push(src.path.clone());
-        }
-    }
-
-    // Shadowing report: managed values still declared in unmanaged sources.
-    let mut shadowed: Vec<String> = Vec::new();
-    for src in &map.sources {
-        for d in &src.declarations {
-            if d.class == LineClass::Managed && selected_names.contains(d.name.as_str()) {
-                shadowed.push(format!(
-                    "{}:{} {}={} (now overridden by the managed value)",
-                    src.path,
-                    d.line,
-                    d.name,
-                    d.value.as_deref().unwrap_or("")
-                ));
+        } else {
+            for rc in &inputs.rc_targets {
+                text.push_str(&format!("\nInclude block appended to {}:\n", rc.target));
+                for line in block.lines() {
+                    text.push_str(&format!("  {line}\n"));
+                }
             }
         }
-    }
-
-    let canonical_path = format!("~/{}", envmap::CANONICAL_REL);
-    let block = envmap::include_block();
-
-    let mut text = String::new();
-    text.push_str("Dry run — nothing will be written.\n\n");
-    text.push_str(&format!("Canonical file {canonical_path}:\n"));
-    for line in canonical.lines() {
-        text.push_str(&format!("  {line}\n"));
-    }
-    if include_targets.is_empty() {
+        if !inputs.shadowed.is_empty() {
+            text.push_str("\nShadowing after consolidation:\n");
+            for s in &inputs.shadowed {
+                text.push_str(&format!("  {s} (overridden by the managed value)\n"));
+            }
+        }
         text.push_str(
-            "\nNo existing shell file declares a selected variable; no include block is needed.\n",
+            "\nNothing has been changed. Drop --dry-run to persist a plan, then\n\
+             `configctl apply --last` to apply it (approval, journal, backup, rollback).\n",
         );
-    } else {
-        for target in &include_targets {
-            text.push_str(&format!("\nInclude block appended to {target}:\n"));
-            for line in block.lines() {
-                text.push_str(&format!("  {line}\n"));
-            }
-        }
+        let data = serde_json::json!({
+            "dry_run": true,
+            "mode": mode,
+            "canonical_path": format!("~/{}", envmap::CANONICAL_REL),
+            "canonical_content": canonical,
+            "include_block": block,
+            "include_targets": inputs.rc_targets.iter().map(|r| r.target.clone()).collect::<Vec<_>>(),
+            "shadowed": inputs.shadowed,
+            "settings": entries.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(),
+        });
+        return EnvConsolidateOutput {
+            text,
+            data,
+            error: None,
+            exit_code: 0,
+        };
     }
-    if !shadowed.is_empty() {
-        text.push_str("\nShadowing after consolidation:\n");
-        for s in &shadowed {
-            text.push_str(&format!("  {s}\n"));
-        }
-    }
-    text.push_str(
-        "\nNot applied: the journaled write engine is phase E2 \
-         (docs/ENV_CONSOLIDATION.md §13). Nothing has been changed.\n",
+
+    let state_dir = configctl_core::state::resolve_state_dir(state_dir_arg);
+    let plan_id = configctl_core::state::new_plan_id();
+    let plan = configctl_core::plan::build_env_consolidation_plan(
+        &loaded,
+        &inputs.rc_targets,
+        inputs.canonical_current.as_deref(),
+        inputs.envd_current.as_ref(),
+        inputs.warnings.clone(),
+        &plan_id,
+        configctl_core::state::now_secs(),
     );
-
-    let data = serde_json::json!({
-        "dry_run": true,
-        "mode": mode,
-        "canonical_path": canonical_path,
-        "canonical_content": canonical,
-        "include_block": block,
-        "include_targets": include_targets,
-        "shadowed": shadowed,
-        "selected": selected.iter().map(|(k, v)| serde_json::json!({"name": k, "value": v})).collect::<Vec<_>>(),
-    });
-
+    if let Err(e) = configctl_core::state::save_plan(&state_dir, &plan, &loaded.dir) {
+        return consolidate_err(&e, 2);
+    }
+    let text = super::plan::render_human(&plan);
     EnvConsolidateOutput {
         text,
-        data,
+        data: super::plan::plan_json(&plan),
         error: None,
         exit_code: 0,
     }

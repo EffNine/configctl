@@ -604,6 +604,20 @@ pub fn ensure_include_block(content: &str) -> String {
     s
 }
 
+/// True when any entry's name or value trips the conservative secret screen.
+/// Returns the offending variable name (never the value).
+///
+/// Used as published, defense-in-depth evidence before writing the canonical
+/// shell env file: a trip must abort the write, never pass the value through.
+pub fn first_secret_like(entries: &[(String, String)]) -> Option<String> {
+    for (name, value) in entries {
+        if is_secret_name(name) || is_secret_value(value) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

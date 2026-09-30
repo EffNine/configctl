@@ -20,6 +20,9 @@ repairs.
 - Managed files (content hash vs bundle payload).
 - Environment literals (managed env file) and secret references
   (**existence only** — values are never read or compared).
+- Canonical shell env file (`~/.config/configctl/env.sh`, v1.2): when the file
+  exists, the same literals must be present there too (provider `envfile`).
+  Its absence is not drift — shell consolidation is opt-in.
 - Project env schemas (`missing` / `invalid` / `secret_ref_missing` /
   `unknown` per variable; see `env verify`).
 - Git `user.name` / `user.email`.

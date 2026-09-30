@@ -21,6 +21,7 @@ $ configctl doctor                   # state + interrupted-apply diagnostics
 $ configctl guide [topic]            # plain-language help while you work
 $ configctl env explain              # where env settings live + which wins (v1.2)
 $ configctl env consolidate --dry-run # preview one managed env file (v1.2)
+$ configctl env consolidate          # plan it; `apply` writes, `rollback` undoes
 ```
 
 Local-first, offline-capable, no accounts, no telemetry, no cloud dependency.
