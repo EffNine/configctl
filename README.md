@@ -73,6 +73,15 @@ v1 bundles keep loading. See [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md).
 | [docs/RESOURCE_CLASSIFICATION.md](docs/RESOURCE_CLASSIFICATION.md) | v1.1 classification: classes, evidence, capture actions |
 | [docs/DISCOVERY_MODEL.md](docs/DISCOVERY_MODEL.md) | v1.1 discovery pipeline: mounts, walk, probes, completeness |
 
+## Install
+
+Requirements: Linux and Rust 1.97 (see `rust-toolchain.toml`).
+
+```console
+$ cargo install --git https://github.com/EffNine/configctl.git --locked
+$ configctl --version   # or: configctl doctor
+```
+
 ## Build and test
 
 ```console
