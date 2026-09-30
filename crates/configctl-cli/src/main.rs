@@ -6,8 +6,8 @@
 
 use clap::{Parser, Subcommand};
 use configctl_cli::commands::{
-    apply, audit, capture, doctor, env, init, plan, profile, rollback, scan, secrets, status,
-    verify, why,
+    apply, audit, capture, doctor, env, init, onboard, plan, profile, rollback, scan, secrets,
+    status, verify, why,
 };
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
@@ -271,6 +271,27 @@ enum Cmd {
         #[arg(value_name = "TOPIC")]
         topic: Option<String>,
     },
+    /// Guided first run: scan, explain, and write a profile (no config changes)
+    Onboard {
+        /// Paths to look at (defaults to the usual project roots under $HOME)
+        #[arg(value_name = "PATH")]
+        roots: Vec<String>,
+        /// Additional paths to look at
+        #[arg(long = "root", value_name = "PATH")]
+        extra_roots: Vec<String>,
+        /// Where to write the profile bundle
+        #[arg(long = "output", alias = "out", value_name = "DIR")]
+        output: Option<String>,
+        /// Override $HOME for the env explanation and default output location
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
+        /// Overwrite an existing non-empty output directory
+        #[arg(long)]
+        force: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -469,6 +490,7 @@ fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
         Some(Cmd::Init { json, .. }) => (Topic::Start, *json, false),
         Some(Cmd::Status { json, .. }) => (Topic::Status, *json, false),
         Some(Cmd::Why { json, .. }) => (Topic::Why, *json, false),
+        Some(Cmd::Onboard { json, .. }) => (Topic::Start, *json, false),
         Some(Cmd::Profile { cmd }) => match cmd {
             ProfileCmd::List { json }
             | ProfileCmd::Show { json, .. }
@@ -1559,6 +1581,48 @@ fn run(cli: Cli) -> ExitCode {
                 }
                 finish(0)
             }
+        }
+        Some(Cmd::Onboard {
+            roots,
+            extra_roots,
+            output,
+            home,
+            force,
+            json,
+        }) => {
+            let out = onboard::run_onboard(
+                roots,
+                extra_roots,
+                output.as_deref(),
+                home.as_deref().map(std::path::Path::new),
+                *force,
+                &runner,
+            );
+            if let Some(e) = &out.error {
+                if *json {
+                    println!(
+                        "{}",
+                        configctl_cli::render::Envelope::error(
+                            "onboard",
+                            e,
+                            "pick another --output DIR or pass --force"
+                        )
+                        .to_json()
+                    );
+                } else {
+                    eprintln!("error: {e}");
+                }
+                return finish(out.exit_code as u8);
+            }
+            if *json {
+                println!(
+                    "{}",
+                    configctl_cli::render::Envelope::ok("onboard", out.data).to_json()
+                );
+            } else {
+                print!("{}", out.text);
+            }
+            finish(out.exit_code as u8)
         }
     };
     code

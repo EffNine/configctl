@@ -1,17 +1,19 @@
 # ENV_CONSOLIDATION.md — user-driven environment consolidation
 
-Status: **Phases E1–E2 implemented (v1.2).** `configctl env explain` (mode 1,
-read-only) and `configctl env consolidate` — which persists a journaled plan
-writing the canonical `~/.config/configctl/env.sh` plus one marker include
+Status: **Phases E1, E2, and E4 implemented (v1.2).** `configctl env explain`
+(mode 1, read-only), `configctl env consolidate` — which persists a journaled
+plan writing the canonical `~/.config/configctl/env.sh` plus one marker include
 block per participating rc file, applied through the normal `apply` and undone
-by `rollback` — are implemented. Mode 3 (`--mode move`, phase E5) and
-`onboard` (phase E4) are not implemented yet; see §13. Current behavior
-otherwise: `capture` records non-secret environment literals in the profile,
-and `apply` writes them to `~/.config/environment.d/90-configctl.conf`
-(see `APPLY.md`). This document specifies how configctl can additionally find
-environment declarations scattered across shell startup files, explain them in
-plain language, and — only with explicit approval — consolidate them into one
-managed file that every shell reads.
+by `rollback` — and `configctl onboard` (guided read-only first run that writes
+only the profile bundle) are implemented. Mode 3 (`--mode move`, phase E5) is
+not implemented: promoting it to an automatic path requires its own threat
+review, per §7. Current behavior otherwise: `capture` records non-secret
+environment literals in the profile, and `apply` writes them to
+`~/.config/environment.d/90-configctl.conf` (see `APPLY.md`). This document
+specifies how configctl can additionally find environment declarations
+scattered across shell startup files, explain them in plain language, and —
+only with explicit approval — consolidate them into one managed file that every
+shell reads.
 
 Audience: §1 is written for people who have never thought about `~/.bashrc`.
 Everything after it is an engineering specification.
@@ -410,7 +412,7 @@ exit 0 with empty data when nothing is found.
 | E1 ✅ | `env explain` (parser + human/JSON report) | delivered in v1.2: core `envmap` parser + 17 unit tests, `env explain` human/JSON, `env consolidate --dry-run` preview, e2e canary clean |
 | E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | delivered in v1.2: both kinds wired end to end (`SAFE_REPRODUCE`, backed up, rollback byte-exact), `expected_before` TOCTOU guards, canonical file + `environment.d` kept in sync from one profile, `verify` checks the canonical file (`envfile` provider); idempotency + stale-plan refusal + rollback tests green |
 | E3 | `env consolidate` CLI + shadowing report | e2e on messy fixture home |
-| E4 | `onboard` + `status` + `why` + `undo`/`--last` | beginner script walkthrough; docs updated |
+| E4 | `onboard` + `status` + `why` + `undo`/`--last` | delivered in v1.2: `onboard` (read-only + bundle only, refuses to overwrite), `status`/`why` shipped earlier, `apply --last`/`rollback --last` shipped earlier |
 | E5 | mode 3 assisted manual (patch emission) + threat review | design sign-off; opt-in only |
 
 E1–E2 are the core; E4 is where the beginner value lands. E5 ships only after

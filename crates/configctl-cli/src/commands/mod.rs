@@ -7,6 +7,7 @@ pub mod common;
 pub mod doctor;
 pub mod env;
 pub mod init;
+pub mod onboard;
 pub mod plan;
 pub mod profile;
 pub mod rollback;

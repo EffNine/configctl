@@ -558,6 +558,21 @@ operation touching the target (kind, journal phase, backup hash) with the
 rollback command when applicable. Targets outside `$HOME` are refused with
 exit 2.
 
+### 2.16 `configctl onboard`
+
+```
+configctl onboard [PATH...] [--root <PATH>] [--output <DIR>] [--home <DIR>] [--force] [--json]
+```
+
+Guided first run (v1.2): a read-only scan, a plain-language environment
+explanation, and a capture summary, ending with the exact next commands. It is
+read-only apart from writing the profile bundle (default
+`~/.config/configctl/profiles/this-machine`). It never creates a plan, applies,
+or changes configuration, and it never guesses an answer for the user. An
+existing non-empty output directory is refused (exit 5) unless `--force`.
+`--home` overrides `$HOME` for the environment explanation and the default
+output location.
+
 ---
 
 ## 3. Output rules
@@ -606,6 +621,7 @@ Apply 6 operations to this machine? [y/N]
 | hardening, JSON stability, RC | P8 |
 | `env explain`, `env consolidate --dry-run` | v1.2 E1 |
 | `env consolidate` (plan → apply → rollback), `verify` `envfile` provider | v1.2 E2 |
+| `onboard` | v1.2 E4 |
 
 `profile migrate` supports `--to 1` only (v1 is the sole schema; already-
 current profiles report no-op). `secrets set` reads via hidden prompt or

@@ -29,6 +29,11 @@ Environment consolidation (v1.2), phases E1–E2.
   when it exists; `plan` renders an "Environment (shell files)" group.
 - `env consolidate` also keeps `~/.config/environment.d/90-configctl.conf` in
   sync from the same profile data, so both env artifacts land in one plan.
+- `configctl onboard` — guided first run that composes a read-only scan, the
+  environment explanation, and a capture summary, then writes the profile
+  bundle (default `~/.config/configctl/profiles/this-machine`). It never plans,
+  applies, or changes configuration, and refuses to overwrite a non-empty
+  output directory (exit 5) unless `--force`.
 
 ### Changed
 
