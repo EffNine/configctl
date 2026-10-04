@@ -37,8 +37,9 @@ dump. Base-OS packages, caches, build outputs, and secret values are
 deliberately left out (see §3).
 
 Capture consumes P1 discovery results (it never re-implements discovery) plus
-two narrow live probes: installed packages (`dpkg-query`) and global Git
-config (`git config --global --list`). Both go through `CommandRunner` with
+narrow live probes: installed packages (`dpkg-query`, plus `rpm -qa` and
+`pacman -Q` where those binaries exist) and global Git
+config (`git config --global --list`). All go through `CommandRunner` with
 fixed argv — never a shell.
 
 ---
@@ -47,7 +48,7 @@ fixed argv — never a shell.
 
 | Area | Source | Output |
 |---|---|---|
-| Packages | `dpkg-query -W` intersected with the tooling allowlist (+ all other managers recorded by name) | `[packages].apt` + `[packages].other` + `packages.lock.toml` (apt + per-manager versions) |
+| Packages | Native managers (`dpkg-query -W`, `rpm -qa --queryformat`, `pacman -Q`) intersected with the tooling allowlist (+ all other managers recorded by name) | `[packages].apt` + `[packages].dnf` + `[packages].pacman` + `[packages].other` + `packages.lock.toml` (per-manager versions) |
 | Home dotfiles | `$HOME` candidates (`HOME_ALLOWLIST`: shell, editor, terminal, toolchain configs) passing safety + classification veto | `[[files]]` + `files/home/*` payloads (with `origin`/`detected_by`/`classification` provenance) |
 | Project metadata | P1 `projects` + env/config associations + content roles | `[[projects]]` (portable paths, ecosystems, env/config basenames, markers, role counts) + `[[directories]]` |
 | Toolchains/executables | version-probed executables (registry-gated) | `[toolchains]` + `[executables]` (name, version, provenance) |
@@ -73,7 +74,7 @@ and prints the breakdown in every summary:
   secret-bearing file payloads (the whole file is excluded, never copied).
 - **Unsupported**: symlinks (P0 requires rejection), non-regular files,
   unavailable package manager, unknown service state.
-- **Unknown**: unreadable paths, missing `git`/`dpkg-query`.
+- **Unknown**: unreadable paths, missing `git`/`dpkg-query`/`rpm`/`pacman`.
 
 The package summary always reports `N installed observed, M selected by
 tooling-allowlist-v1, K excluded`, so the set is never pretended complete.

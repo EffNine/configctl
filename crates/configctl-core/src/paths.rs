@@ -251,6 +251,33 @@ pub fn validate_package_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a `dnf`/`rpm`/`pacman` package name.
+///
+/// Broader than the apt grammar (RPM names may start with an uppercase
+/// letter, e.g. `NetworkManager`, and both ecosystems use `_` and `:`) but
+/// still T16-safe: ASCII alphanumeric start, `[A-Za-z0-9+._:-]`
+/// continuation, no `..`, no whitespace, no shell metacharacters, no path
+/// separators — fixed argv can never become a shell.
+pub fn validate_native_package_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("package name must not be empty".into());
+    }
+    if name.len() > 128 || name.contains('\0') || name.contains("..") {
+        return Err(format!("invalid package name: {name:?}"));
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return Err(format!("invalid package name: {name:?}")),
+    }
+    if !chars.all(|c| {
+        c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.' || c == '_' || c == ':'
+    }) {
+        return Err(format!("invalid package name: {name:?}"));
+    }
+    Ok(())
+}
+
 /// Validate a systemd user unit name (`[A-Za-z0-9:_.@-]+\.service`, v1 only
 /// `.service` user units).
 pub fn validate_service_unit(unit: &str) -> bool {

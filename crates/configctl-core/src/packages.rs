@@ -168,6 +168,12 @@ pub fn capture_packages(runner: &dyn CommandRunner) -> PackageCapture {
 
 /// Names for `profile.toml [packages].apt` (sorted, unique).
 pub fn apt_names(capture: &PackageCapture) -> Vec<String> {
+    selected_names(capture)
+}
+
+/// Selected names (sorted, unique) for any native-manager capture.
+/// Shared by `[packages].apt` / `.dnf` / `.pacman`.
+pub fn selected_names(capture: &PackageCapture) -> Vec<String> {
     let mut names: Vec<String> = capture.selected.iter().map(|p| p.name.clone()).collect();
     names.sort();
     names.dedup();

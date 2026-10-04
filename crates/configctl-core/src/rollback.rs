@@ -278,10 +278,22 @@ pub fn rollback_plan(
                 {
                     // Only report real package mutations, not markers.
                     if op.kind == OperationKind::PackageInstall {
-                        report.manual.push(format!(
-                            "package {}: installed by apply; v1 never auto-removes (manual: apt remove {})",
-                            op.target, op.target
-                        ));
+                        report.manual.push(match op.provider.as_str() {
+                            "dnf" => {
+                                crate::package_managers::DnfProvider::rollback_hint(&op.target)
+                            }
+                            "pacman" => {
+                                crate::package_managers::PacmanProvider::rollback_hint(&op.target)
+                            }
+                            "apt" => format!(
+                                "package {}: installed by apply; v1 never auto-removes (manual: apt remove {})",
+                                op.target, op.target
+                            ),
+                            _ => format!(
+                                "package {}: installed by apply; v1 never auto-removes (manual handling required)",
+                                op.target
+                            ),
+                        });
                     }
                 }
             }

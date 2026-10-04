@@ -40,6 +40,15 @@ pub struct ObservedState {
     pub packages: BTreeMap<String, String>,
     /// True when the package manager was unreachable.
     pub packages_unavailable: bool,
+    /// Installed dnf packages (name → EVR) for wanted names only.
+    pub dnf_packages: BTreeMap<String, String>,
+    /// True when dnf was wanted but unreachable (wrong distro, no binary,
+    /// or `rpm` query failed).
+    pub dnf_unavailable: bool,
+    /// Installed pacman packages (name → version) for wanted names only.
+    pub pacman_packages: BTreeMap<String, String>,
+    /// True when pacman was wanted but unreachable.
+    pub pacman_unavailable: bool,
     /// Managed file targets (`~/...` as declared) → observation.
     pub files: BTreeMap<String, FileObs>,
     /// Git metadata (None when git unavailable).
@@ -80,8 +89,10 @@ pub fn expand_target(target: &str, home: &Path) -> Option<PathBuf> {
 
 /// Observe machine state for the slices a profile cares about.
 ///
-/// - `apt_names`: desired package names (observation records installed
+/// - `apt_names`: desired apt package names (observation records installed
 ///   versions for exactly these names; nothing else is queried per-package).
+/// - `dnf_names` / `pacman_names`: desired dnf/pacman names (same contract;
+///   empty lists probe nothing and record nothing unavailable).
 /// - `file_targets`: declared `~/...` targets.
 /// - `git_wanted`: whether to probe git config.
 /// - `services`: desired unit names.
@@ -92,6 +103,42 @@ pub fn observe(
     runner: &dyn CommandRunner,
     home: &Path,
     apt_names: &[String],
+    dnf_names: &[String],
+    pacman_names: &[String],
+    file_targets: &[String],
+    git_wanted: bool,
+    services: &[String],
+    secret_refs: &[String],
+    secret_probe: &dyn Fn(&str) -> Option<bool>,
+    env_names: &[String],
+) -> ObservedState {
+    observe_with_os(
+        runner,
+        home,
+        apt_names,
+        dnf_names,
+        pacman_names,
+        crate::package_managers::read_os_release().as_ref(),
+        file_targets,
+        git_wanted,
+        services,
+        secret_refs,
+        secret_probe,
+        env_names,
+    )
+}
+
+/// [`observe`] with an injectable os-release identity (test seam: production
+/// passes the live `/etc/os-release`; tests pass fixtures so distro gating is
+/// hermetic on any host).
+#[allow(clippy::too_many_arguments)]
+pub fn observe_with_os(
+    runner: &dyn CommandRunner,
+    home: &Path,
+    apt_names: &[String],
+    dnf_names: &[String],
+    pacman_names: &[String],
+    os: Option<&crate::package_managers::OsRelease>,
     file_targets: &[String],
     git_wanted: bool,
     services: &[String],
@@ -126,6 +173,20 @@ pub fn observe(
                 st.packages_unavailable = true;
             }
         }
+    }
+
+    // Native managers (dnf/pacman): distro-gated, binary-probed, then
+    // listed — non-matching platforms record `Unavailable` with zero
+    // subprocess calls (never a silent skip).
+    {
+        let (map, unavailable) =
+            crate::package_managers::observe_dnf_packages(runner, os, dnf_names);
+        st.dnf_packages = map;
+        st.dnf_unavailable = unavailable;
+        let (map, unavailable) =
+            crate::package_managers::observe_pacman_packages(runner, os, pacman_names);
+        st.pacman_packages = map;
+        st.pacman_unavailable = unavailable;
     }
 
     // Files.
@@ -382,6 +443,10 @@ pub fn fingerprint(st: &ObservedState) -> String {
     let doc = serde_json::json!({
         "packages": st.packages,
         "packages_unavailable": st.packages_unavailable,
+        "dnf_packages": st.dnf_packages,
+        "dnf_unavailable": st.dnf_unavailable,
+        "pacman_packages": st.pacman_packages,
+        "pacman_unavailable": st.pacman_unavailable,
         "files": st.files.iter().map(|(k, v)| (k, serde_json::json!({
             "exists": v.exists,
             "is_symlink": v.is_symlink,

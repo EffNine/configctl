@@ -133,9 +133,16 @@ pub fn run_capture(
     // Validate profile name early (fail-closed).
     paths::validate_profile_name(&opts.profile_name)?;
 
-    // --- Packages ---
+    // --- Packages (apt + native dnf/pacman, same allowlist policy) ---
     let pkg = packages::capture_packages(runner);
     let apt_names = packages::apt_names(&pkg);
+    // dnf/pacman attempts fail fast off-platform (missing binary) and stay
+    // silent there: on Ubuntu capture output is byte-identical to v1, while
+    // on Fedora/Arch the native set is captured into its own section.
+    let dnf_pkg = crate::package_managers::DnfProvider::capture(runner);
+    let pacman_pkg = crate::package_managers::PacmanProvider::capture(runner);
+    let dnf_names = crate::package_managers::selected_names(&dnf_pkg);
+    let pacman_names = crate::package_managers::selected_names(&pacman_pkg);
 
     // --- Git ---
     let git: Option<GitConfig> = gitmeta::capture_git(runner);
@@ -606,8 +613,18 @@ pub fn run_capture(
     for p in &pkg.selected {
         lock_apt.insert(p.name.clone(), p.version.clone());
     }
+    let mut lock_dnf: BTreeMap<String, String> = BTreeMap::new();
+    for p in &dnf_pkg.selected {
+        lock_dnf.insert(p.name.clone(), p.version.clone());
+    }
+    let mut lock_pacman: BTreeMap<String, String> = BTreeMap::new();
+    for p in &pacman_pkg.selected {
+        lock_pacman.insert(p.name.clone(), p.version.clone());
+    }
     // v1.1: lock versions for every other manager too (names only in the
-    // profile; versions live here). Capped to bound bundle size.
+    // profile; versions live here). Native managers (apt/dnf/pacman) are
+    // skipped: their locks come from the allowlist capture above
+    // (selected-only, like apt), not from the full inventory.
     let mut lock_other: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     {
         let mut total = 0usize;
@@ -615,7 +632,12 @@ pub fn run_capture(
             if total >= 20000 {
                 break;
             }
-            if v.manager == "apt" || v.name.is_empty() || v.name.len() > 128 {
+            if v.manager == "apt"
+                || v.manager == "dnf"
+                || v.manager == "pacman"
+                || v.name.is_empty()
+                || v.name.len() > 128
+            {
                 continue;
             }
             if let Some(version) = &v.version {
@@ -642,6 +664,8 @@ pub fn run_capture(
         hardware,
         packages: crate::profile::Packages {
             apt: apt_names,
+            dnf: dnf_names,
+            pacman: pacman_names,
             other: packages_other,
         },
         toolchains,
@@ -685,6 +709,28 @@ pub fn run_capture(
             pkg.excluded_by_policy
         ));
     }
+    // Native managers report the same policy line when they ran (silent when
+    // their binary is absent, so Ubuntu output is unchanged).
+    for (manager, native) in [("dnf", &dnf_pkg), ("pacman", &pacman_pkg)] {
+        if native.unavailable {
+            continue;
+        }
+        if native.selected.is_empty() {
+            excluded.push(format!(
+                "packages ({manager}): {} installed observed, 0 selected by {} (no recognized tooling installed)",
+                native.installed_total,
+                packages::POLICY_ID
+            ));
+        } else {
+            excluded.push(format!(
+                "packages ({manager}): {} installed observed, {} selected by {}, {} excluded",
+                native.installed_total,
+                native.selected.len(),
+                packages::POLICY_ID,
+                native.excluded_by_policy
+            ));
+        }
+    }
     // Build-artifact / cache honesty: the P1 walker already excludes these;
     // surface the scanner's excluded-path count so capture never silently
     // pretends completeness.
@@ -700,9 +746,15 @@ pub fn run_capture(
     let summary = CaptureSummary {
         projects: profile.projects.len(),
         files: profile.files.len(),
-        packages: profile.packages.apt.len(),
-        installed_observed: pkg.installed_total,
-        excluded_by_policy: pkg.excluded_by_policy,
+        packages: profile.packages.apt.len()
+            + profile.packages.dnf.len()
+            + profile.packages.pacman.len(),
+        installed_observed: pkg.installed_total
+            + dnf_pkg.installed_total
+            + pacman_pkg.installed_total,
+        excluded_by_policy: pkg.excluded_by_policy
+            + dnf_pkg.excluded_by_policy
+            + pacman_pkg.excluded_by_policy,
         env_schemas: env_schemas.len(),
         secrets: secrets_count,
         redacted: redacted_vars,
@@ -785,6 +837,8 @@ pub fn run_capture(
         lock: PackagesLock {
             schema_version: SCHEMA_VERSION,
             apt: lock_apt,
+            dnf: lock_dnf,
+            pacman: lock_pacman,
             other: lock_other,
         },
         payloads,
@@ -850,7 +904,8 @@ pub fn write_bundle(
     written.push("secrets.manifest.toml".into());
 
     // packages.lock.toml (only when packages were observed)
-    if !result.lock.apt.is_empty() {
+    if !result.lock.apt.is_empty() || !result.lock.dnf.is_empty() || !result.lock.pacman.is_empty()
+    {
         let lock_toml = result.lock.to_toml()?;
         let lock_path = canon_out.join("packages.lock.toml");
         files::atomic_write_inside(&canon_out, &lock_path, lock_toml.as_bytes())?;

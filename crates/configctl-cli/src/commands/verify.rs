@@ -55,6 +55,8 @@ pub fn run_verify(
         },
     };
     let apt_names = loaded.profile.packages.apt.clone();
+    let dnf_names = loaded.profile.packages.dnf.clone();
+    let pacman_names = loaded.profile.packages.pacman.clone();
     let file_targets: Vec<String> = loaded
         .profile
         .files
@@ -93,6 +95,8 @@ pub fn run_verify(
         runner,
         &home,
         &apt_names,
+        &dnf_names,
+        &pacman_names,
         &file_targets,
         git_wanted,
         &services,

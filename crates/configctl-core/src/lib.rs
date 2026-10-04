@@ -24,6 +24,7 @@ pub mod inventory;
 pub mod limits;
 pub mod lock;
 pub mod observe;
+pub mod package_managers;
 pub mod packages;
 pub mod paths;
 pub mod plan;

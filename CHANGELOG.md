@@ -11,6 +11,20 @@ plan/state format changes, all defaults backward compatible).
 
 ### Added
 
+- Native `dnf` (Fedora/RHEL) and `pacman` (Arch) package providers, mirroring
+  the apt discipline: distro-gated probes (`/etc/os-release` `ID`/`ID_LIKE`
+  plus the manager binary — non-matching platforms record `Unavailable`, never
+  a silent skip), fixed-argv `CommandRunner` calls only, version-checked
+  output parsing (rpm epochs preserved via a pinned
+  `--queryformat '%{NAME}\t%{EVR}\t%{ARCH}\n'`; `pacman -Q` two-field lines),
+  elevation via `sudo -n` only (`dnf install -y`, `pacman -S --noconfirm`),
+  and report-only rollback (`dnf remove` / `pacman -R` manual hints;
+  `supports_rollback: false`, like apt). Profiles gain first-class
+  `[packages].dnf` / `[packages].pacman` keys plus matching
+  `packages.lock.toml` sections (unknown managers such as `apk` are still
+  rejected); `doctor` reports the native manager; `plan` renders per-manager
+  package groups. Only the `dnf` binary is ever invoked (on Fedora 41+ it is
+  the DNF5 symlink, so one binary covers both generations).
 - `env consolidate --mode move --emit-patch` accepts `--backup-dir <DIR>`:
   all timestamped backups go there as `<rc-basename>.configctl-bak-<ts>`
   (`0600`, byte-identical, verified; restore commands point at the new

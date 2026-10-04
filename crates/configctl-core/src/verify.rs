@@ -62,47 +62,29 @@ pub fn verify(loaded: &LoadedProfile, observed: &ObservedState) -> VerifyReport 
     let mut results: Vec<CheckResult> = Vec::new();
     let profile = &loaded.profile;
 
-    // Packages.
-    let mut apt = profile.packages.apt.clone();
-    apt.sort();
-    apt.dedup();
-    for name in &apt {
-        if observed.packages_unavailable {
-            results.push(check(
-                "package",
-                name,
-                CheckStatus::Unsupported,
-                "package manager unavailable",
-            ));
-        } else if let Some(installed) = observed.packages.get(name) {
-            if let Some(lock) = loaded.lock.as_ref().and_then(|l| l.apt.get(name)) {
-                if lock == installed {
-                    results.push(check(
-                        "package",
-                        name,
-                        CheckStatus::Match,
-                        "installed version matches lock",
-                    ));
-                } else {
-                    results.push(check(
-                        "package",
-                        name,
-                        CheckStatus::Drift,
-                        "installed version differs from lock (report-only; v1 never downgrades)",
-                    ));
-                }
-            } else {
-                results.push(check("package", name, CheckStatus::Match, "installed"));
-            }
-        } else {
-            results.push(check(
-                "package",
-                name,
-                CheckStatus::Missing,
-                "not installed",
-            ));
-        }
-    }
+    // Packages (apt, dnf, pacman share one honest shape: unavailable →
+    // Unsupported, installed → Match/lock-drift, absent → Missing).
+    verify_native_packages(
+        &profile.packages.apt,
+        &observed.packages,
+        observed.packages_unavailable,
+        loaded.lock.as_ref().map(|l| &l.apt),
+        &mut results,
+    );
+    verify_native_packages(
+        &profile.packages.dnf,
+        &observed.dnf_packages,
+        observed.dnf_unavailable,
+        loaded.lock.as_ref().map(|l| &l.dnf),
+        &mut results,
+    );
+    verify_native_packages(
+        &profile.packages.pacman,
+        &observed.pacman_packages,
+        observed.pacman_unavailable,
+        loaded.lock.as_ref().map(|l| &l.pacman),
+        &mut results,
+    );
 
     // Files (content identity vs payload hash).
     let mut files = profile.files.clone();
@@ -412,6 +394,57 @@ fn check(resource: &str, target: &str, status: CheckStatus, detail: &str) -> Che
         target: target.into(),
         status,
         detail: detail.into(),
+    }
+}
+
+/// One native package manager's slice of verification (shared by apt, dnf,
+/// and pacman so every manager reports identically).
+fn verify_native_packages(
+    desired: &[String],
+    installed: &std::collections::BTreeMap<String, String>,
+    unavailable: bool,
+    lock: Option<&std::collections::BTreeMap<String, String>>,
+    results: &mut Vec<CheckResult>,
+) {
+    let mut names = desired.to_vec();
+    names.sort();
+    names.dedup();
+    for name in &names {
+        if unavailable {
+            results.push(check(
+                "package",
+                name,
+                CheckStatus::Unsupported,
+                "package manager unavailable",
+            ));
+        } else if let Some(installed_version) = installed.get(name) {
+            if let Some(lock_version) = lock.and_then(|l| l.get(name)) {
+                if lock_version == installed_version {
+                    results.push(check(
+                        "package",
+                        name,
+                        CheckStatus::Match,
+                        "installed version matches lock",
+                    ));
+                } else {
+                    results.push(check(
+                        "package",
+                        name,
+                        CheckStatus::Drift,
+                        "installed version differs from lock (report-only; v1 never downgrades)",
+                    ));
+                }
+            } else {
+                results.push(check("package", name, CheckStatus::Match, "installed"));
+            }
+        } else {
+            results.push(check(
+                "package",
+                name,
+                CheckStatus::Missing,
+                "not installed",
+            ));
+        }
     }
 }
 

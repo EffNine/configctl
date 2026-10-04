@@ -127,6 +127,8 @@ pub fn run_plan(
 
     // Observe.
     let apt_names = loaded.profile.packages.apt.clone();
+    let dnf_names = loaded.profile.packages.dnf.clone();
+    let pacman_names = loaded.profile.packages.pacman.clone();
     let file_targets: Vec<String> = loaded
         .profile
         .files
@@ -146,6 +148,8 @@ pub fn run_plan(
         runner,
         &home,
         &apt_names,
+        &dnf_names,
+        &pacman_names,
         &file_targets,
         git_wanted,
         &services,
@@ -187,6 +191,8 @@ pub fn render_human(plan: &Plan) -> String {
     // Group by provider.
     let groups = [
         ("apt", "Packages:"),
+        ("dnf", "Packages (dnf):"),
+        ("pacman", "Packages (pacman):"),
         ("files", "Files:"),
         ("env", "Environment:"),
         ("envfile", "Environment (shell files):"),

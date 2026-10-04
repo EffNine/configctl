@@ -322,7 +322,8 @@ fn preview_written(result: &capture::CaptureResult) -> Vec<String> {
         "profile.toml".to_string(),
         "secrets.manifest.toml".to_string(),
     ];
-    if !result.lock.apt.is_empty() {
+    if !result.lock.apt.is_empty() || !result.lock.dnf.is_empty() || !result.lock.pacman.is_empty()
+    {
         v.push("packages.lock.toml".to_string());
     }
     for k in result.env_schemas.keys() {
@@ -401,7 +402,10 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::scan_view::ScanVi
         packages_other: {
             let mut v = Vec::new();
             for p in &r.package_inventory.packages {
-                if p.manager != "apt" {
+                // Native managers (apt/dnf/pacman) have first-class profile
+                // sections fed by the allowlist capture; only the rest are
+                // observational `other` names.
+                if p.manager != "apt" && p.manager != "dnf" && p.manager != "pacman" {
                     v.push((p.manager.clone(), p.name.clone()));
                 }
             }

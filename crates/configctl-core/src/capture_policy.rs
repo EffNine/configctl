@@ -78,11 +78,15 @@ pub fn decide_home_file(class: ResourceClass) -> CaptureDecision {
 /// Decide a package name entry (names only — versions live in the lock).
 pub fn decide_package(manager: &str, explicit: Option<bool>) -> CaptureDecision {
     match manager {
-        "apt" => {
+        // Native system managers: the allowlist capture selects tooling
+        // names; the plan/apply path drives installs per manager.
+        "apt" | "dnf" | "pacman" => {
             if explicit.unwrap_or(false) {
-                CaptureDecision::capture("explicitly requested apt package")
+                CaptureDecision::capture("explicitly requested system package")
             } else {
-                CaptureDecision::observe("apt package recorded; apply selects via tooling policy")
+                CaptureDecision::observe(
+                    "system package recorded; apply selects via tooling policy",
+                )
             }
         }
         _ => CaptureDecision::capture("package name captured with manager provenance"),

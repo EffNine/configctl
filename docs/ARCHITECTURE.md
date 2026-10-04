@@ -47,7 +47,7 @@ the core is portable today.
 | Projects | Marker-based detection with recorded evidence, `.env*` discovery |
 | Profiles | TOML bundles, schema versioning, validation, capture from a live machine |
 | Planning | Deterministic operation list, conflicts, diff, machine-readable output |
-| Apply | Files, env variables (literals), apt packages, `systemd --user` units |
+| Apply | Files, env variables (literals), apt/dnf/pacman packages, `systemd --user` units |
 | Verify | `MATCH` / `DRIFT` / `MISSING` / `UNMANAGED` / `UNKNOWN` per resource |
 | Rollback | File content rollback from a content-addressed backup store; conservative package behavior |
 | Secrets | `SecretProvider` abstraction; Linux Secret Service backend; references only; redaction everywhere |
@@ -154,7 +154,7 @@ Guarantees per phase:
 
 Dependency direction: **discovery → core**, never the reverse (core defines
 a `ScanView` adapter so it never imports discovery). Provider logic (files,
-apt, systemd, env, secrets, audit) lives in focused core modules behind
+apt, dnf, pacman, systemd, env, secrets, audit) lives in focused core modules behind
 narrow traits; the CLI crate is the only place that wires concrete backends.
 A nine-crate split was considered and deferred as premature.
 
@@ -644,7 +644,7 @@ adapter does not already need.
 | D6 | Secrets addressed as `secret://<namespace>/<path>` | Profile-safe references, provider-agnostic | Decided |
 | D7 | Synchronous core; parallelism only inside discovery | Simplicity; avoids async runtime in a CLI | Decided |
 | D8 | Apply executes the exact approved plan; no auto re-plan | Safety, auditability | Decided |
-| D9 | Providers shell out to `apt-get` / `systemctl --user` via an injected `CommandRunner` | Testable, no heavy D-Bus dependency; parsing is isolated and version-checked | Decided |
+| D9 | Providers shell out to `apt-get` / `dnf` / `pacman` / `systemctl --user` via an injected `CommandRunner` | Testable, no heavy D-Bus dependency; parsing is isolated and version-checked | Decided |
 | D10 | Env-file parsing is an in-core, bounded, pure parser | Shared by discovery and validation; full control over safety limits | Decided |
 | D11 | v0.1 does not write secret values to disk at all | Avoids the highest-risk behavior until runtime injection is designed | Decided |
 | D12 | Managed files only under `$HOME` (user services only) | Keeps privilege surface out of v0.1 | Decided |

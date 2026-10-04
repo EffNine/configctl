@@ -23,10 +23,15 @@ fn governor() -> Arc<ResourceGovernor> {
 #[test]
 fn apt_and_cargo_managers_parse_with_provenance() {
     let runner = FakeCommandRunner::new();
-    // Probe order: apt, snap, flatpak, cargo, rustup, npm, pip, pipx, uv, mise, asdf.
+    // Probe order: apt, dnf, pacman, snap, flatpak, cargo, rustup, npm,
+    // pip, pipx, uv, mise, asdf.
     runner.queue(ok(
         "git\t1:2.43.0-1ubuntu1\tamd64\nripgrep\t14.1.0-1\tamd64\n",
     ));
+    runner.queue(ok(
+        "git\t0:2.43.0-1.fc40\tx86_64\nripgrep\t14.1.0-1.fc40\tx86_64\n",
+    ));
+    runner.queue(ok("ripgrep 14.1.0-1\nbat 0.24.0-1\n"));
     runner.queue(CommandOutput::default()); // snap missing
     runner.queue(CommandOutput::default()); // flatpak missing
     runner.queue(ok(
@@ -42,6 +47,23 @@ fn apt_and_cargo_managers_parse_with_provenance() {
     assert_eq!(apt[0].arch.as_deref(), Some("amd64"));
     assert_eq!(apt[0].provenance, "dpkg");
 
+    let dnf: Vec<_> = inv.packages.iter().filter(|p| p.manager == "dnf").collect();
+    assert_eq!(dnf.len(), 2);
+    assert_eq!(dnf[0].name, "git");
+    assert_eq!(dnf[0].version.as_deref(), Some("0:2.43.0-1.fc40"));
+    assert_eq!(dnf[0].arch.as_deref(), Some("x86_64"));
+    assert_eq!(dnf[0].provenance, "rpm");
+
+    let pacman: Vec<_> = inv
+        .packages
+        .iter()
+        .filter(|p| p.manager == "pacman")
+        .collect();
+    assert_eq!(pacman.len(), 2);
+    assert!(pacman
+        .iter()
+        .any(|p| p.name == "ripgrep" && p.version.as_deref() == Some("14.1.0-1")));
+
     let cargo: Vec<_> = inv
         .packages
         .iter()
@@ -55,6 +77,8 @@ fn apt_and_cargo_managers_parse_with_provenance() {
 
     let managers: Vec<&str> = inv.managers.iter().map(|m| m.manager.as_str()).collect();
     assert!(managers.contains(&"apt"));
+    assert!(managers.contains(&"dnf"));
+    assert!(managers.contains(&"pacman"));
     assert!(managers.contains(&"mise"));
     assert!(managers.contains(&"asdf"));
     let snap = inv.managers.iter().find(|m| m.manager == "snap").unwrap();
@@ -68,16 +92,65 @@ fn hostile_manager_output_cannot_inject() {
     runner.queue(ok(
         "good-pkg\t1.0\tamd64\n$(evil)\t1.0\tamd64\n../../etc\t1.0\tamd64\n",
     ));
+    runner.queue(ok(
+        "good-pkg\t1.0-1.fc40\tx86_64\n$(evil)\t1.0\tnoarch\n../../etc\t1.0\tx86_64\n",
+    ));
+    runner.queue(ok("good-pkg 1.0-1\n$(evil) 1.0\n"));
     let inv = collect_packages(&governor(), &runner);
     let apt: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apt").collect();
     assert_eq!(apt.len(), 1);
     assert_eq!(apt[0].name, "good-pkg");
+    let dnf: Vec<_> = inv.packages.iter().filter(|p| p.manager == "dnf").collect();
+    assert_eq!(dnf.len(), 1);
+    assert_eq!(dnf[0].name, "good-pkg");
+    let pacman: Vec<_> = inv
+        .packages
+        .iter()
+        .filter(|p| p.manager == "pacman")
+        .collect();
+    assert_eq!(pacman.len(), 1);
+    assert_eq!(pacman[0].name, "good-pkg");
+}
+
+#[test]
+fn dnf_and_pacman_parse_epochs_and_arch() {
+    let runner = FakeCommandRunner::new();
+    runner.queue(CommandOutput::default()); // apt missing
+                                            // rpm EVR keeps epochs verbatim; arch rides along; bad lines skipped.
+    runner.queue(ok(
+        "git\t1:2.43.0-1.fc40\tx86_64\nNetworkManager\t1:1.46.0-1.fc40\tx86_64\nkernel\t6.8.5-301.fc40\tx86_64\nmalformed-line\n$(evil)\t1.0\tx86_64\n",
+    ));
+    // pacman -Q: exactly two fields; epoch preserved; extras skipped.
+    runner.queue(ok(
+        "ripgrep 14.1.0-1\nlinux 6.8.5.arch1-1\nwine 1:9.0-1\nthree fields here\nlonely\n",
+    ));
+    let inv = collect_packages(&governor(), &runner);
+    let dnf: Vec<_> = inv.packages.iter().filter(|p| p.manager == "dnf").collect();
+    assert_eq!(dnf.len(), 3);
+    let git = dnf.iter().find(|p| p.name == "git").unwrap();
+    assert_eq!(git.version.as_deref(), Some("1:2.43.0-1.fc40"));
+    assert_eq!(git.arch.as_deref(), Some("x86_64"));
+    assert_eq!(git.provenance, "rpm");
+    assert!(dnf.iter().any(|p| p.name == "NetworkManager"));
+    let pacman: Vec<_> = inv
+        .packages
+        .iter()
+        .filter(|p| p.manager == "pacman")
+        .collect();
+    assert_eq!(pacman.len(), 3);
+    assert!(pacman
+        .iter()
+        .any(|p| p.name == "wine" && p.version.as_deref() == Some("1:9.0-1")));
+    assert!(pacman.iter().all(|p| p.provenance == "pacman"));
+    assert!(pacman.iter().all(|p| p.arch.is_none()));
 }
 
 #[test]
 fn unknown_provenance_is_explicit() {
     let runner = FakeCommandRunner::new();
     runner.queue(CommandOutput::default()); // apt missing
+    runner.queue(CommandOutput::default()); // dnf missing
+    runner.queue(CommandOutput::default()); // pacman missing
     runner.queue(ok(
         "Name  Version  Rev  Tracking  Publisher  Notes\ncode 1.2.3 100 stable vscode classic\n",
     ));

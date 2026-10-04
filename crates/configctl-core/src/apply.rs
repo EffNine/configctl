@@ -12,8 +12,10 @@
 //! - Every mutating file write is atomic (temp + fsync + rename) with a
 //!   content-addressed backup taken first.
 //! - Global mutation lock held for the whole run.
-//! - `PackageInstall` uses `sudo -n apt-get install -y <name>` (fixed argv);
-//!   privilege failure fails safely (exit 8 class) without faking success.
+//! - `PackageInstall` uses per-manager fixed argv (`sudo -n apt-get
+//!   install -y <name>`, `sudo -n dnf install -y <name>`,
+//!   `sudo -n pacman -S --noconfirm <name>`); privilege failure fails safely
+//!   (exit 8 class) without faking success.
 //! - `systemd --user` only; never system scope.
 //! - Test-only crash simulation via `CONFIGCTL_FAIL_AFTER=<op-id>:<PHASE>`
 //!   (journal the phase, then return without further writes — the persisted
@@ -390,8 +392,27 @@ fn execute_op(
             journal(PH_INTENT, None, Some(&format!("install {}", op.target)))
                 .map_err(ApplyError::Internal)?;
             failpoint(PH_INTENT)?;
+            // Provider dispatch (static registry: apt | dnf | pacman).
+            // Anything else fails closed — a hand-edited plan cannot steer
+            // fixed argv at an unexpected binary.
+            let install_req = match op.provider.as_str() {
+                "apt" => CommandRequest::new(
+                    "sudo",
+                    ["-n", "apt-get", "install", "-y", op.target.as_str()],
+                )
+                .output_cap(128 * 1024),
+                "dnf" => crate::package_managers::DnfProvider::install_request(&op.target),
+                "pacman" => crate::package_managers::PacmanProvider::install_request(&op.target),
+                other => {
+                    journal(PH_FAILED, None, Some("unknown package manager"))
+                        .map_err(ApplyError::Internal)?;
+                    return Err(ApplyError::ProviderUnavailable(format!(
+                        "package manager {other:?} unavailable"
+                    )));
+                }
+            };
             // PRECHECK: already installed → noop.
-            if is_package_installed(runner, &op.target) {
+            if is_package_installed(runner, &op.provider, &op.target) {
                 journal(PH_PRECHECK, None, Some("already installed; noop"))
                     .map_err(ApplyError::Internal)?;
                 journal(PH_DONE, None, Some("noop")).map_err(ApplyError::Internal)?;
@@ -411,13 +432,8 @@ fn execute_op(
                 Some("packages have no backup; report-only rollback"),
             )
             .map_err(ApplyError::Internal)?;
-            // EXECUTE: sudo -n apt-get install -y <name> (fixed argv).
-            let req = CommandRequest::new(
-                "sudo",
-                ["-n", "apt-get", "install", "-y", op.target.as_str()],
-            )
-            .output_cap(128 * 1024);
-            let out = runner.run(&req).map_err(|_| {
+            // EXECUTE: sudo -n <manager> install (fixed argv, per-provider).
+            let out = runner.run(&install_req).map_err(|_| {
                 ApplyError::ProviderUnavailable("package manager unavailable".into())
             })?;
             journal(
@@ -427,10 +443,16 @@ fn execute_op(
             )
             .map_err(ApplyError::Internal)?;
             failpoint(PH_EXECUTE)?;
+            // Provider word for failure records (apt strings unchanged).
+            let install_word = match op.provider.as_str() {
+                "dnf" => "dnf install",
+                "pacman" => "pacman install",
+                _ => "apt install",
+            };
             if out.status != Some(0) {
-                journal(PH_FAILED, None, Some("apt install failed"))
+                journal(PH_FAILED, None, Some(&format!("{install_word} failed")))
                     .map_err(ApplyError::Internal)?;
-                let msg = format!("apt install {} failed", op.target);
+                let msg = format!("{install_word} {} failed", op.target);
                 if out.stderr.contains("a password is required")
                     || out.stderr.contains("no tty present")
                     || out.stderr.contains("sudo:")
@@ -446,7 +468,7 @@ fn execute_op(
                 });
             }
             // POSTCHECK.
-            if !is_package_installed(runner, &op.target) {
+            if !is_package_installed(runner, &op.provider, &op.target) {
                 journal(PH_FAILED, None, Some("postcheck: not installed"))
                     .map_err(ApplyError::Internal)?;
                 return Err(ApplyError::OpFailed {
@@ -1535,10 +1557,30 @@ fn has_symlink_parent(abs: &Path) -> bool {
     false
 }
 
-fn is_package_installed(runner: &dyn CommandRunner, name: &str) -> bool {
-    let req = CommandRequest::new("dpkg-query", ["-W", "-f=${Status}", name]).output_cap(8 * 1024);
-    match runner.run(&req) {
-        Ok(o) => o.status == Some(0) && o.stdout.contains("install ok installed"),
-        Err(_) => false,
+fn is_package_installed(runner: &dyn CommandRunner, provider: &str, name: &str) -> bool {
+    match provider {
+        "dnf" => match runner.run(&crate::package_managers::DnfProvider::is_installed_request(
+            name,
+        )) {
+            Ok(o) => crate::package_managers::DnfProvider::parse_installed(&o),
+            Err(_) => false,
+        },
+        "pacman" => {
+            match runner.run(&crate::package_managers::PacmanProvider::is_installed_request(name)) {
+                Ok(o) => crate::package_managers::PacmanProvider::parse_installed(&o),
+                Err(_) => false,
+            }
+        }
+        // apt (and any legacy op without a recognized manager): the v1
+        // `dpkg-query` status probe. Unknown managers never reach here —
+        // the install dispatch above refuses them first.
+        _ => {
+            let req = CommandRequest::new("dpkg-query", ["-W", "-f=${Status}", name])
+                .output_cap(8 * 1024);
+            match runner.run(&req) {
+                Ok(o) => o.status == Some(0) && o.stdout.contains("install ok installed"),
+                Err(_) => false,
+            }
+        }
     }
 }

@@ -233,6 +233,8 @@ fn package_missing_and_mismatch() {
     loaded.lock = Some(PackagesLock {
         schema_version: SCHEMA_VERSION,
         apt: BTreeMap::from([("ripgrep".into(), "14.1.0".into())]),
+        dnf: Default::default(),
+        pacman: Default::default(),
         other: Default::default(),
     });
     let mut st = ObservedState::default();
@@ -411,6 +413,8 @@ fn command_runner_is_only_subprocess_path() {
         &runner,
         home.path(),
         &["ripgrep".to_string()],
+        &[],
+        &[],
         &[],
         false,
         &[],

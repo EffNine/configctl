@@ -187,3 +187,65 @@ fn plan_never_writes_to_home() {
         .collect();
     assert_eq!(before, after, "plan must not mutate the machine");
 }
+
+#[test]
+fn native_managers_plan_and_render_per_manager() {
+    // Composition: a profile declaring dnf/pacman packages plans
+    // provider-tagged ops and renders them under per-manager groups. On this
+    // (non-native) host both managers are Unavailable — recorded honestly as
+    // Unsupported, never silently skipped.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let bundle = tmp.path().join("work");
+    let state = tmp.path().join("state");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&bundle).unwrap();
+    std::fs::write(
+        bundle.join("profile.toml"),
+        "schema_version = 1\nname = \"work\"\n\n[packages]\ndnf = [\"htop\"]\npacman = [\"jq\"]\n",
+    )
+    .unwrap();
+    let runner = FakeCommandRunner::new();
+    let out = plan_cmd::run_plan(
+        bundle.to_str().unwrap(),
+        Some(state.to_str().unwrap()),
+        Some(&home),
+        &runner,
+        Some("plan-native"),
+        Some(1000),
+    );
+    assert!(out.error.is_none());
+    let plan = out.plan.expect("plan");
+    let dnf_op = plan
+        .operations
+        .iter()
+        .find(|o| o.provider == "dnf")
+        .expect("dnf op");
+    let pacman_op = plan
+        .operations
+        .iter()
+        .find(|o| o.provider == "pacman")
+        .expect("pacman op");
+    // Provider tags are always present (static registration). The Unsupported
+    // expectation below only holds off the native distro — on a Fedora/Arch
+    // host the same ops would be installs, so gate on the live platform.
+    let live = configctl_core::package_managers::read_os_release();
+    let native = |family| {
+        live.as_ref()
+            .map(|os| configctl_core::package_managers::family_matches(os, family))
+            .unwrap_or(false)
+    };
+    use configctl_core::package_managers::NativeFamily;
+    if !native(NativeFamily::Fedora) {
+        assert_eq!(format!("{:?}", dnf_op.kind), "Unsupported");
+    }
+    if !native(NativeFamily::Arch) {
+        assert_eq!(format!("{:?}", pacman_op.kind), "Unsupported");
+    }
+    let human = plan_cmd::render_human(&plan);
+    assert!(human.contains("Packages (dnf):"), "{human:?}");
+    assert!(human.contains("Packages (pacman):"), "{human:?}");
+    if !native(NativeFamily::Fedora) {
+        assert!(human.contains("package htop: package manager unavailable"));
+    }
+}

@@ -342,10 +342,12 @@ Rules:
 |---|---|---|---|---|---|
 | files | `configctl-provider-files` | FileCreate/Write/Delete | no | full | atomic writes, backups, symlink-safe |
 | apt | `configctl-provider-apt` | PackageInstall/Remove | `sudo -n` only | report-only | fixed argv, no shell, output parsing version-checked |
+| dnf | `configctl-provider-dnf` | PackageInstall/Remove | `sudo -n` only | report-only | Fedora/RHEL: probe is distro (`ID`/`ID_LIKE`) + `dnf` binary; lists via pinned `rpm -qa --queryformat '%{NAME}\t%{EVR}\t%{ARCH}\n'` (epochs preserved); installs via `sudo -n dnf install -y` |
+| pacman | `configctl-provider-pacman` | PackageInstall/Remove | `sudo -n` only | report-only | Arch: probe is distro (`ID`/`ID_LIKE`) + `pacman` binary; lists via `pacman -Q`; installs via `sudo -n pacman -S --noconfirm` |
 | systemd | `configctl-provider-systemd` | ServiceEnable/Disable/Start/Stop | no | full (state revert) | `systemctl --user` only |
 | env | `configctl-provider-env` | EnvSet/EnvUnset | no | full | writes `environment.d` file; secret refs validated, never written |
 
-Deferred providers: `dnf`, `pacman`, `apk`, `brew`, `nix`, system-scope systemd,
+Deferred providers: `apk`, `brew`, `nix`, system-scope systemd,
 and non-systemd init (`DEFERRED_FEATURES.md`).
 
 ---
@@ -359,6 +361,8 @@ fn registry(platform: &PlatformInfo) -> ProviderRegistry {
     let mut r = ProviderRegistry::new();
     r.add(Box::new(FilesProvider::new()));
     r.add(Box::new(AptProvider::new()));
+    r.add(Box::new(DnfProvider::new()));
+    r.add(Box::new(PacmanProvider::new()));
     r.add(Box::new(SystemdProvider::new()));
     r.add(Box::new(EnvProvider::new()));
     r

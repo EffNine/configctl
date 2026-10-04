@@ -177,60 +177,40 @@ pub fn build_plan(
     let profile = &loaded.profile;
 
     // ---- Packages (rank 1) ----
-    let mut apt = profile.packages.apt.clone();
-    apt.sort();
-    apt.dedup();
-    for name in &apt {
-        if observed.packages_unavailable {
-            operations.push(mk_op(
-                "apt",
-                OperationKind::Unsupported,
-                name,
-                format!("package {name}: package manager unavailable"),
-                "low",
-                None,
-                None,
-                RollbackSupport::Unsupported,
-            ));
-            warnings.push(PlanWarning {
-                code: "packages_unavailable".into(),
-                message: format!("package {name}: manager unavailable; marked unsupported"),
-            });
-            continue;
-        }
-        match observed.packages.get(name) {
-            None => operations.push(mk_op(
-                "apt",
-                OperationKind::PackageInstall,
-                name,
-                format!("package {name}: install via apt"),
-                "medium",
-                None,
-                None,
-                RollbackSupport::Unsupported,
-            )),
-            Some(installed) => {
-                if let Some(lock) = loaded.lock.as_ref().and_then(|l| l.apt.get(name)) {
-                    if lock != installed {
-                        operations.push(mk_op(
-                            "apt",
-                            OperationKind::PackageVersionMismatch,
-                            name,
-                            format!("package {name}: installed {installed} differs from lock {lock} (report-only)"),
-                            "low",
-                            None,
-                            None,
-                            RollbackSupport::Unsupported,
-                        ));
-                        warnings.push(PlanWarning {
-                            code: "package_version_drift".into(),
-                            message: format!("package {name}: installed version differs from lock; v1 never downgrades"),
-                        });
-                    }
-                }
-            }
-        }
-    }
+    // apt, dnf, and pacman share one honest shape: unavailable → Unsupported
+    // + warning (never a silent skip); missing → PackageInstall; lock drift →
+    // report-only PackageVersionMismatch (v1 never downgrades). Rollback is
+    // Unsupported for every manager (report-only, like apt).
+    plan_native_packages(
+        "apt",
+        "install via apt",
+        &profile.packages.apt,
+        &observed.packages,
+        observed.packages_unavailable,
+        loaded.lock.as_ref().map(|l| &l.apt),
+        &mut operations,
+        &mut warnings,
+    );
+    plan_native_packages(
+        "dnf",
+        "install via dnf",
+        &profile.packages.dnf,
+        &observed.dnf_packages,
+        observed.dnf_unavailable,
+        loaded.lock.as_ref().map(|l| &l.dnf),
+        &mut operations,
+        &mut warnings,
+    );
+    plan_native_packages(
+        "pacman",
+        "install via pacman",
+        &profile.packages.pacman,
+        &observed.pacman_packages,
+        observed.pacman_unavailable,
+        loaded.lock.as_ref().map(|l| &l.pacman),
+        &mut operations,
+        &mut warnings,
+    );
 
     // ---- Files (rank 2) ----
     let mut files = profile.files.clone();
@@ -777,12 +757,84 @@ fn mk_op(
 /// Execution order: packages → files → env → services → git → core.
 fn provider_rank(p: &str) -> u8 {
     match p {
-        "apt" => 1,
+        "apt" | "dnf" | "pacman" => 1,
         "files" => 2,
         "env" => 3,
         "systemd" => 4,
         "git" => 5,
         _ => 9,
+    }
+}
+
+/// One native package manager's slice of the plan (shared by apt, dnf, and
+/// pacman so every manager is equally honest: unavailable → `Unsupported` +
+/// warning, missing → `PackageInstall`, lock drift → report-only
+/// `PackageVersionMismatch`). `install_via` is the provider-specific summary
+/// fragment (`install via apt`, …).
+#[allow(clippy::too_many_arguments)]
+fn plan_native_packages(
+    provider: &str,
+    install_via: &str,
+    desired: &[String],
+    installed: &BTreeMap<String, String>,
+    unavailable: bool,
+    lock: Option<&BTreeMap<String, String>>,
+    operations: &mut Vec<Operation>,
+    warnings: &mut Vec<PlanWarning>,
+) {
+    let mut names = desired.to_vec();
+    names.sort();
+    names.dedup();
+    for name in &names {
+        if unavailable {
+            operations.push(mk_op(
+                provider,
+                OperationKind::Unsupported,
+                name,
+                format!("package {name}: package manager unavailable"),
+                "low",
+                None,
+                None,
+                RollbackSupport::Unsupported,
+            ));
+            warnings.push(PlanWarning {
+                code: "packages_unavailable".into(),
+                message: format!("package {name}: manager unavailable; marked unsupported"),
+            });
+            continue;
+        }
+        match installed.get(name) {
+            None => operations.push(mk_op(
+                provider,
+                OperationKind::PackageInstall,
+                name,
+                format!("package {name}: {install_via}"),
+                "medium",
+                None,
+                None,
+                RollbackSupport::Unsupported,
+            )),
+            Some(installed_version) => {
+                if let Some(lock_version) = lock.and_then(|l| l.get(name)) {
+                    if lock_version != installed_version {
+                        operations.push(mk_op(
+                            provider,
+                            OperationKind::PackageVersionMismatch,
+                            name,
+                            format!("package {name}: installed {installed_version} differs from lock {lock_version} (report-only)"),
+                            "low",
+                            None,
+                            None,
+                            RollbackSupport::Unsupported,
+                        ));
+                        warnings.push(PlanWarning {
+                            code: "package_version_drift".into(),
+                            message: format!("package {name}: installed version differs from lock; v1 never downgrades"),
+                        });
+                    }
+                }
+            }
+        }
     }
 }
 

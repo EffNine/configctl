@@ -113,6 +113,12 @@ pub struct Packages {
     /// Sorted, unique apt package names.
     #[serde(default)]
     pub apt: Vec<String>,
+    /// Sorted, unique dnf package names (Fedora/RHEL-likes).
+    #[serde(default)]
+    pub dnf: Vec<String>,
+    /// Sorted, unique pacman package names (Arch-likes).
+    #[serde(default)]
+    pub pacman: Vec<String>,
     /// v2: per-manager package names (`cargo`, `npm`, `pip`, `mise`, …).
     /// Sorted, unique each. apt stays top-level for v1 compatibility.
     #[serde(default)]
@@ -387,6 +393,12 @@ pub struct PackagesLock {
     pub schema_version: u32,
     #[serde(default)]
     pub apt: std::collections::BTreeMap<String, String>,
+    /// dnf name → EVR (record-and-report, like apt).
+    #[serde(default)]
+    pub dnf: std::collections::BTreeMap<String, String>,
+    /// pacman name → version (record-and-report, like apt).
+    #[serde(default)]
+    pub pacman: std::collections::BTreeMap<String, String>,
     /// v2: per-manager name → version (`cargo → {ripgrep → 14.1.0}`).
     #[serde(default)]
     pub other: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
@@ -422,6 +434,10 @@ impl Profile {
     pub fn canonicalize(&mut self) {
         self.packages.apt.sort();
         self.packages.apt.dedup();
+        self.packages.dnf.sort();
+        self.packages.dnf.dedup();
+        self.packages.pacman.sort();
+        self.packages.pacman.dedup();
         for names in self.packages.other.values_mut() {
             names.sort();
             names.dedup();
@@ -488,7 +504,7 @@ impl Profile {
             }
         }
 
-        // Packages (v1 apt + v2 per-manager).
+        // Packages (v1 apt + native dnf/pacman + v2 per-manager).
         {
             let mut seen = std::collections::BTreeSet::new();
             for name in &self.packages.apt {
@@ -496,6 +512,22 @@ impl Profile {
                     errors.push(e);
                 }
                 if !seen.insert(format!("apt:{name}")) {
+                    errors.push(format!("duplicate package entry: {name:?}"));
+                }
+            }
+            for name in &self.packages.dnf {
+                if let Err(e) = paths::validate_native_package_name(name) {
+                    errors.push(e);
+                }
+                if !seen.insert(format!("dnf:{name}")) {
+                    errors.push(format!("duplicate package entry: {name:?}"));
+                }
+            }
+            for name in &self.packages.pacman {
+                if let Err(e) = paths::validate_native_package_name(name) {
+                    errors.push(e);
+                }
+                if !seen.insert(format!("pacman:{name}")) {
                     errors.push(format!("duplicate package entry: {name:?}"));
                 }
             }

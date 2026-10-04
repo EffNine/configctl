@@ -63,6 +63,8 @@ pub fn collect(
         ("go", vec!["version"]),
         ("systemctl", vec!["--version"]),
         ("apt", vec!["--version"]),
+        ("dnf", vec!["--version"]),
+        ("pacman", vec!["--version"]),
         ("docker", vec!["--version"]),
     ];
 
@@ -165,10 +167,11 @@ mod tests {
         let governor = ResourceGovernor::new(GovernorBudgets::default());
         let runner = FakeCommandRunner::new();
         // Probe order: git, cargo, rustc, python3, node, npm, go, systemctl,
-        // apt, docker. Make git and cargo succeed; the rest fail to spawn.
+        // apt, dnf, pacman, docker. Make git and cargo succeed; the rest
+        // fail to spawn.
         runner.queue(out(0, "git version 2.43.0\n"));
         runner.queue(out(0, "cargo 1.97.0 (abc)\n"));
-        for _ in 0..8 {
+        for _ in 0..10 {
             runner.queue(CommandOutput {
                 status: None,
                 ..CommandOutput::default()

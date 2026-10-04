@@ -47,6 +47,10 @@ pub fn run_doctor(state_dir_override: Option<&str>, runner: &dyn CommandRunner) 
         .unwrap_or_else(|| "Linux".into());
     let package_manager = if probe(runner, "dpkg-query", &["--version"]) {
         "apt (dpkg-query available)".into()
+    } else if probe(runner, "dnf", &["--version"]) {
+        "dnf (dnf available)".into()
+    } else if probe(runner, "pacman", &["--version"]) {
+        "pacman (pacman available)".into()
     } else {
         "unavailable".into()
     };

@@ -25,8 +25,8 @@ pub struct PackageRecord {
     /// Architecture when the manager reported one (dpkg, snap, flatpak).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
-    /// Manager that reported it: `apt`, `snap`, `flatpak`, `cargo`,
-    /// `rustup`, `npm`, `pip`, `pipx`, `uv`, `go`, `mise`, `asdf`.
+    /// Manager that reported it: `apt`, `dnf`, `pacman`, `snap`, `flatpak`,
+    /// `cargo`, `rustup`, `npm`, `pip`, `pipx`, `uv`, `go`, `mise`, `asdf`.
     pub manager: String,
     /// Install location when known (e.g. `~/.cargo/bin`, bundle path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +131,63 @@ fn apt_parse(text: &str) -> Vec<PackageRecord> {
             location: None,
             explicit: None,
             provenance: "dpkg".into(),
+        });
+    }
+    out
+}
+
+/// Pinned `rpm -qa --queryformat '%{NAME}\t%{EVR}\t%{ARCH}\n'` output:
+/// `name\t[epoch:]version-release[\tarch]`. Epochs are preserved verbatim
+/// for lock comparison; malformed lines are skipped, never guessed.
+fn dnf_parse(text: &str) -> Vec<PackageRecord> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let (Some(name), Some(version)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Some(name), Some(version)) = (sanitize_name(name), sanitize_version(version)) else {
+            continue;
+        };
+        let arch = parts.next().and_then(sanitize_name);
+        out.push(PackageRecord {
+            name,
+            version: Some(version),
+            arch,
+            manager: "dnf".into(),
+            location: None,
+            explicit: None,
+            provenance: "rpm".into(),
+        });
+    }
+    out
+}
+
+/// `pacman -Q` output: `name version` per line (exactly two fields; names
+/// and versions never contain whitespace).
+fn pacman_parse(text: &str) -> Vec<PackageRecord> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() != 2 {
+            continue;
+        }
+        let (Some(name), Some(version)) = (sanitize_name(cols[0]), sanitize_version(cols[1]))
+        else {
+            continue;
+        };
+        out.push(PackageRecord {
+            name,
+            version: Some(version),
+            arch: None,
+            manager: "pacman".into(),
+            location: None,
+            explicit: None,
+            provenance: "pacman".into(),
         });
     }
     out
@@ -425,6 +482,12 @@ pub fn collect_packages(
             "dpkg-query",
             vec!["-W", "-f=${Package}\t${Version}\t${Architecture}\n"],
         ),
+        (
+            "dnf",
+            "rpm",
+            vec!["-qa", "--queryformat", "%{NAME}\t%{EVR}\t%{ARCH}\n"],
+        ),
+        ("pacman", "pacman", vec!["-Q"]),
         ("snap", "snap", vec!["list"]),
         (
             "flatpak",
@@ -444,6 +507,8 @@ pub fn collect_packages(
     for (manager, program, args) in &probes {
         let parse = |text: &str| match *manager {
             "apt" => apt_parse(text),
+            "dnf" => dnf_parse(text),
+            "pacman" => pacman_parse(text),
             "snap" => snap_parse(text),
             "flatpak" => flatpak_parse(text),
             "cargo" => cargo_parse(text),
