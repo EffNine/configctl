@@ -126,7 +126,7 @@ fn move_full_lifecycle_dry_run_emit_patch_apply_restore() {
 
     // 4. move --dry-run: eligible list, strict read-only, canary-clean.
     let before = snapshot(&home);
-    let preview = run_env_consolidate_move(Some(&bundle_s), Some(&home), true, None);
+    let preview = run_env_consolidate_move(Some(&bundle_s), Some(&home), true, None, None);
     assert!(preview.error.is_none(), "{:?}", preview.error);
     assert_eq!(preview.exit_code, 0);
     let eligible = preview.data["eligible"].as_array().unwrap();
@@ -168,7 +168,8 @@ fn move_full_lifecycle_dry_run_emit_patch_apply_restore() {
 
     // 5. --emit-patch: valid patch, backups, still no mutation, no secret.
     let patch_path = home.join("move.patch");
-    let emitted = run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path));
+    let emitted =
+        run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path), None);
     assert!(emitted.error.is_none(), "{:?}", emitted.error);
     assert_eq!(emitted.exit_code, 0);
     let patch_text = std::fs::read_to_string(&patch_path).unwrap();
@@ -217,18 +218,16 @@ fn move_full_lifecycle_dry_run_emit_patch_apply_restore() {
         "patch --dry-run -p0 must accept the emitted diff"
     );
 
-    // 6. Second emit: identical content is idempotent, changed content refused.
-    let second = run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path));
-    if second.exit_code == 0 {
-        assert_eq!(
-            std::fs::read_to_string(&patch_path).unwrap(),
-            patch_text,
-            "idempotent re-emit must leave the patch byte-identical"
-        );
-    } else {
-        assert_eq!(second.exit_code, 5);
-        assert!(second.error.unwrap().contains("already exists"));
-    }
+    // 6. Second emit: equivalent body (only the header timestamp may
+    //    differ) is idempotent exit 0; the file is refreshed in place.
+    let second =
+        run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path), None);
+    assert_eq!(second.exit_code, 0, "{:?}", second.error);
+    let second_text = std::fs::read_to_string(&patch_path).unwrap();
+    assert!(
+        configctl_core::envmove::patches_equivalent(&patch_text, &second_text),
+        "idempotent re-emit must leave an equivalent body"
+    );
 
     // 7. The human applies the patch out-of-band; the managed value still
     //    resolves through the include block.
@@ -284,7 +283,13 @@ fn move_full_lifecycle_dry_run_emit_patch_apply_restore() {
 fn move_without_dry_run_or_emit_patch_is_a_usage_error() {
     let tmp = tempfile::tempdir().unwrap();
     let (home, bundle, _state) = world(tmp.path());
-    let out = run_env_consolidate_move(Some(bundle.to_str().unwrap()), Some(&home), false, None);
+    let out = run_env_consolidate_move(
+        Some(bundle.to_str().unwrap()),
+        Some(&home),
+        false,
+        None,
+        None,
+    );
     assert_eq!(out.exit_code, 2);
     assert!(out.error.unwrap().contains("--dry-run"));
     // Nothing was written anywhere.
@@ -305,6 +310,237 @@ fn move_before_include_apply_is_a_precondition_error() {
     )
     .unwrap();
     // No canonical file yet: tombstoning would drop the only definition.
-    let out = run_env_consolidate_move(Some(bundle.to_str().unwrap()), Some(&home), true, None);
+    let out = run_env_consolidate_move(
+        Some(bundle.to_str().unwrap()),
+        Some(&home),
+        true,
+        None,
+        None,
+    );
     assert_eq!(out.exit_code, 5);
+}
+
+#[test]
+fn emit_with_backup_dir_keeps_rc_dir_clean_and_restores_byte_exact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, bundle, state) = world(tmp.path());
+    let state_s = state.to_str().unwrap().to_string();
+    let bundle_s = bundle.to_str().unwrap().to_string();
+    let runner = FakeCommandRunner::new();
+
+    // Mode 2 first: canonical file + include blocks, then apply.
+    let planned = run_env_consolidate(
+        Some(&bundle_s),
+        Some(&state_s),
+        Some(&home),
+        false,
+        "include",
+    );
+    assert!(planned.error.is_none(), "{:?}", planned.error);
+    let plan_id = planned.data["plan_id"].as_str().unwrap().to_string();
+    let applied = configctl_cli::commands::apply::run_apply(
+        Some(&plan_id),
+        None,
+        Some(&state_s),
+        Some(&home),
+        true,
+        false,
+        &[],
+        false,
+        &runner,
+    );
+    assert!(applied.error.is_none());
+
+    let before = snapshot(&home);
+    // Backup dir does not exist yet: it (and parents) must be created.
+    let backup_dir = tmp.path().join("bk").join("nested");
+    assert!(!backup_dir.exists());
+    let patch_path = tmp.path().join("move.patch");
+    let emitted = run_env_consolidate_move(
+        Some(&bundle_s),
+        Some(&home),
+        false,
+        Some(&patch_path),
+        Some(&backup_dir),
+    );
+    assert!(emitted.error.is_none(), "{:?}", emitted.error);
+    assert_eq!(emitted.exit_code, 0);
+    assert!(
+        backup_dir.is_dir(),
+        "backup dir must be created with parents"
+    );
+    // JSON carries the backup dir.
+    assert_eq!(
+        emitted.data["backup_dir"].as_str().unwrap(),
+        backup_dir.to_string_lossy()
+    );
+
+    let backups = emitted.data["backups"].as_array().unwrap();
+    assert!(!backups.is_empty());
+    for b in backups {
+        let backup = b["backup"].as_str().unwrap();
+        let original = b["original"].as_str().unwrap();
+        // Every backup lives under the backup dir, not adjacent to the rc.
+        assert!(
+            backup.starts_with(backup_dir.to_string_lossy().as_ref()),
+            "backup {backup} must live under the backup dir"
+        );
+        assert!(
+            backup.contains(".configctl-bak-"),
+            "backup {backup} must keep the timestamped basename"
+        );
+        let rel = original.strip_prefix("~/").unwrap();
+        assert_eq!(
+            &std::fs::read(backup).unwrap(),
+            &before[rel],
+            "backup of {original} must be byte-identical"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "backups must be 0600"
+            );
+        }
+    }
+    // No backup litter next to the rc files.
+    for entry in std::fs::read_dir(&home).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(
+            !name.contains("configctl-bak"),
+            "rc dir must stay clean, found {name}"
+        );
+    }
+    // Restore commands point at the backup dir.
+    for c in emitted.data["restore_commands"].as_array().unwrap() {
+        let cmd = c.as_str().unwrap();
+        assert!(cmd.starts_with("cp -p "));
+        assert!(
+            cmd.contains(backup_dir.to_string_lossy().as_ref()),
+            "restore command must reference the backup dir: {cmd}"
+        );
+    }
+
+    // The patch still applies with `patch -p0` from $HOME, and restore from
+    // the directed backups is byte-exact.
+    let dry = std::process::Command::new("patch")
+        .args(["--dry-run", "-p0", "--silent"])
+        .current_dir(&home)
+        .stdin(std::fs::File::open(&patch_path).unwrap())
+        .status()
+        .expect("patch binary must exist");
+    assert!(dry.success());
+    let real = std::process::Command::new("patch")
+        .args(["-p0", "--silent"])
+        .current_dir(&home)
+        .stdin(std::fs::File::open(&patch_path).unwrap())
+        .status()
+        .expect("patch binary must exist");
+    assert!(real.success());
+    for b in backups {
+        let backup = b["backup"].as_str().unwrap();
+        let rel = b["original"].as_str().unwrap().strip_prefix("~/").unwrap();
+        std::fs::copy(backup, home.join(rel)).unwrap();
+    }
+    assert_eq!(snapshot(&home), before);
+}
+
+#[test]
+fn backup_dir_requires_emit_patch_and_refuses_non_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, bundle, _state) = world(tmp.path());
+    let bundle_s = bundle.to_str().unwrap().to_string();
+
+    // --backup-dir without --emit-patch is a usage error, nothing written.
+    let dir = tmp.path().join("bk");
+    let out = run_env_consolidate_move(Some(&bundle_s), Some(&home), true, None, Some(&dir));
+    assert_eq!(out.exit_code, 2);
+    assert!(out.error.unwrap().contains("--backup-dir"));
+    assert!(!dir.exists(), "usage error must not create the dir");
+
+    // An existing non-directory is refused with exit 2 + guidance.
+    let file = tmp.path().join("not-a-dir");
+    std::fs::write(&file, b"x").unwrap();
+    let patch_path = tmp.path().join("p.patch");
+    // Need mode-2 state first so assessment succeeds; without the
+    // canonical file this would be a precondition error (exit 5) instead.
+    // world() has no canonical file yet, so seed one via consolidate+apply
+    // is overkill here: assert the refusal happens once backup validation
+    // runs — but validation runs before assessment, so exit 2 regardless.
+    let out = run_env_consolidate_move(
+        Some(&bundle_s),
+        Some(&home),
+        false,
+        Some(&patch_path),
+        Some(&file),
+    );
+    assert_eq!(out.exit_code, 2, "{:?}", out.error);
+    assert!(out.error.unwrap().contains("not a directory"));
+    assert!(!patch_path.exists());
+}
+
+#[test]
+fn re_emit_later_is_idempotent_but_changed_eligible_set_refuses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (home, bundle, state) = world(tmp.path());
+    let state_s = state.to_str().unwrap().to_string();
+    let bundle_s = bundle.to_str().unwrap().to_string();
+    let runner = FakeCommandRunner::new();
+
+    let planned = run_env_consolidate(
+        Some(&bundle_s),
+        Some(&state_s),
+        Some(&home),
+        false,
+        "include",
+    );
+    assert!(planned.error.is_none(), "{:?}", planned.error);
+    let plan_id = planned.data["plan_id"].as_str().unwrap().to_string();
+    let applied = configctl_cli::commands::apply::run_apply(
+        Some(&plan_id),
+        None,
+        Some(&state_s),
+        Some(&home),
+        true,
+        false,
+        &[],
+        false,
+        &runner,
+    );
+    assert!(applied.error.is_none());
+
+    let patch_path = home.join("move.patch");
+    let first =
+        run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path), None);
+    assert_eq!(first.exit_code, 0);
+    let first_text = std::fs::read_to_string(&patch_path).unwrap();
+
+    // Wait for the next UTC second so the header timestamp must differ —
+    // the per-line tombstone body must still compare equivalent.
+    let start = configctl_core::state::now_secs();
+    while configctl_core::state::now_secs() == start {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if configctl_core::state::now_secs() - start > 3 {
+            break;
+        }
+    }
+    let second =
+        run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path), None);
+    assert_eq!(second.exit_code, 0, "{:?}", second.error);
+    let second_text = std::fs::read_to_string(&patch_path).unwrap();
+    assert!(
+        configctl_core::envmove::patches_equivalent(&first_text, &second_text),
+        "re-emit in a later second must be idempotent (equivalent body)"
+    );
+
+    // A genuinely different eligible set still refuses with exit 5.
+    let mut bashrc = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+    bashrc = bashrc.replacen("export EDITOR=vim", "export EDITOR=nano", 1);
+    std::fs::write(home.join(".bashrc"), &bashrc).unwrap();
+    let third =
+        run_env_consolidate_move(Some(&bundle_s), Some(&home), false, Some(&patch_path), None);
+    assert_eq!(third.exit_code, 5);
+    assert!(third.error.unwrap().contains("already exists"));
 }

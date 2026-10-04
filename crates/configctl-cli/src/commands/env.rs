@@ -712,6 +712,7 @@ pub fn run_env_consolidate_move(
     home_override: Option<&Path>,
     dry_run: bool,
     emit_patch: Option<&Path>,
+    backup_dir: Option<&Path>,
 ) -> EnvConsolidateOutput {
     if !dry_run && emit_patch.is_none() {
         return consolidate_err(
@@ -722,6 +723,75 @@ pub fn run_env_consolidate_move(
             2,
         );
     }
+    if backup_dir.is_some() && emit_patch.is_none() {
+        return consolidate_err(
+            "--backup-dir requires --emit-patch <file> with --mode move: \
+             backups are only written when a patch is emitted.",
+            2,
+        );
+    }
+
+    // Resolve + validate the backup directory upfront: create it (and
+    // parents) when missing; refuse a non-directory or non-writable dir
+    // with a usage error before anything is written.
+    let resolved_backup_dir: Option<PathBuf> = match backup_dir {
+        Some(d) => {
+            // An existing non-directory is refused before anything is made.
+            if let Ok(m) = std::fs::metadata(d) {
+                if !m.is_dir() {
+                    return consolidate_err(
+                        &format!(
+                            "backup directory {} is not a directory; pass a writable directory with --backup-dir <DIR>",
+                            d.display()
+                        ),
+                        2,
+                    );
+                }
+            }
+            if let Err(e) = std::fs::create_dir_all(d) {
+                return consolidate_err(
+                    &format!(
+                        "cannot create backup directory {}: {e:?}; pass a writable directory with --backup-dir <DIR>",
+                        d.display()
+                    ),
+                    2,
+                );
+            }
+            match std::fs::metadata(d) {
+                Ok(m) if m.is_dir() => {}
+                _ => {
+                    return consolidate_err(
+                        &format!(
+                            "backup directory {} is not a directory; pass a writable directory with --backup-dir <DIR>",
+                            d.display()
+                        ),
+                        2,
+                    );
+                }
+            }
+            let probe = d.join(".configctl-write-probe");
+            match std::fs::write(&probe, b"probe") {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&probe);
+                }
+                Err(_) => {
+                    return consolidate_err(
+                        &format!(
+                            "backup directory {} is not writable; pass a writable directory with --backup-dir <DIR> or check permissions",
+                            d.display()
+                        ),
+                        2,
+                    );
+                }
+            }
+            Some(d.to_path_buf())
+        }
+        None => None,
+    };
+    let backup_dir_json = match &resolved_backup_dir {
+        Some(d) => serde_json::Value::String(d.to_string_lossy().into_owned()),
+        None => serde_json::Value::Null,
+    };
 
     let profile_dir = match super::common::resolve_profile_default(profile_arg) {
         Ok(d) => d,
@@ -749,6 +819,7 @@ pub fn run_env_consolidate_move(
             "eligible": [], "ineligible": [],
             "patch_file": null, "backups": [],
             "restore_commands": [], "file_hashes": {}, "warnings": ["no_environment"],
+            "backup_dir": backup_dir_json,
         });
         return EnvConsolidateOutput {
             text,
@@ -849,12 +920,40 @@ pub fn run_env_consolidate_move(
     if let Some(patch_path) = emit_patch {
         let now = configctl_core::state::now_secs();
         let patch = envmove::build_patch(&assessment, now);
-        // Refuse to overwrite an existing patch unless byte-identical.
+        // Re-emit is idempotent when the eligible set + file hashes are
+        // unchanged: per-line tombstones are deterministic, so only the
+        // single header timestamp line may differ. A genuinely different
+        // body (changed eligible set) still refuses with exit 5.
         if patch_path.exists() {
             match std::fs::read(patch_path) {
-                Ok(cur) if cur == patch.as_bytes() => {
+                Ok(cur) => {
+                    let cur_str = String::from_utf8_lossy(&cur);
+                    if !envmove::patches_equivalent(&cur_str, &patch) {
+                        return consolidate_err(
+                            &format!(
+                                "patch file {} already exists with different content; remove it or choose another path with --emit-patch <file>",
+                                patch_path.display()
+                            ),
+                            5,
+                        );
+                    }
+                    // Equivalent body: refresh the header timestamp so the
+                    // re-emitted file stays current, then report idempotency.
+                    if cur != patch.as_bytes() {
+                        if let Err(e) = std::fs::write(patch_path, patch.as_bytes()) {
+                            return consolidate_err(&format!("cannot write patch file: {e:?}"), 1);
+                        }
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(
+                                patch_path,
+                                std::fs::Permissions::from_mode(0o600),
+                            );
+                        }
+                    }
                     text.push_str(&format!(
-                        "\nPatch {} already exists with identical content; nothing written.\n",
+                        "\nPatch {} already exists with equivalent content (only the header timestamp differs); re-emitted.\n",
                         patch_path.display()
                     ));
                 }
@@ -875,6 +974,7 @@ pub fn run_env_consolidate_move(
                 "patch_file": patch_path.to_string_lossy(),
                 "backups": backups, "restore_commands": restore_commands,
                 "file_hashes": file_hashes, "warnings": assessment.warnings,
+                "backup_dir": backup_dir_json,
             });
             if dry_run {
                 text.push_str("\nNothing was written (dry run also skips patch emission when the patch already exists).\n");
@@ -887,7 +987,10 @@ pub fn run_env_consolidate_move(
             };
         }
 
-        // Timestamped adjacent backups first (0600, byte-identical, verified).
+        // Timestamped backups first (0600, byte-identical, verified). With
+        // --backup-dir they live in that directory as
+        // `<rc-basename>.configctl-bak-<ts>`; otherwise adjacent to the rc
+        // file (backward compatible).
         let mut touched: Vec<&str> = assessment.eligible.iter().map(|e| e.rel.as_str()).collect();
         touched.sort();
         touched.dedup();
@@ -916,12 +1019,7 @@ pub fn run_env_consolidate_move(
                     5,
                 );
             }
-            let backup = abs.with_extension(format!(
-                "{}configctl-bak-{now}",
-                abs.extension()
-                    .map(|x| format!("{}.", x.to_string_lossy()))
-                    .unwrap_or_default()
-            ));
+            let backup = envmove::backup_path_for(&home, rel, now, resolved_backup_dir.as_deref());
             if backup.exists() {
                 match std::fs::read(&backup) {
                     Ok(cur) if cur == current => {}
@@ -1030,6 +1128,7 @@ pub fn run_env_consolidate_move(
         "patch_file": patch_file,
         "backups": backups, "restore_commands": restore_commands,
         "file_hashes": file_hashes, "warnings": assessment.warnings,
+        "backup_dir": backup_dir_json,
     });
     EnvConsolidateOutput {
         text,

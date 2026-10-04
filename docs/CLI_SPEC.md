@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission).** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission); v1.3 polish adds `--backup-dir` for move emission, `--home` on `apply`/`verify`/`rollback`/`undo`, and deterministic tombstones with idempotent re-emit.** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -260,9 +260,17 @@ No changes made. Run `configctl apply 01J8Z6…` to execute this plan.
 ### 2.6 `configctl apply`
 
 ```
-configctl apply [PLAN_ID] [--plan <PLAN_ID>] [--last] [--yes] [--dry-run]
+configctl apply [PLAN_ID] [--plan <PLAN_ID>] [--last] [--home <DIR>] [--yes] [--dry-run]
                 [--adopt <TARGET>]... [--json]
 ```
+
+- Takes a plan ID only — never a profile path (refused, exit 2). Refuses stale plans
+  (profile or state changed since planning) with exit 5 and a re-plan hint.
+- `--home <DIR>` overrides `$HOME` when resolving home-relative plan targets
+  (default: `$HOME`). Thread the same `--home` through `env consolidate`,
+  `apply`, `verify`, and `rollback` for a temp-HOME lifecycle (see §2.9.1);
+  a plan built against one home and applied against another is refused as
+  stale (exit 5).
 
 - Takes a plan ID only — never a profile path (refused, exit 2). Refuses stale plans
   (profile or state changed since planning) with exit 5 and a re-plan hint.
@@ -307,11 +315,13 @@ Recover with: configctl rollback 01J8Z...   (file changes only)
 ### 2.7 `configctl verify`
 
 ```
-configctl verify [NAME] [--json] [--strict] [-v]
+configctl verify [NAME] [--home <DIR>] [--json] [--strict] [-v]
 ```
 
 Read-only comparison of profile vs machine. Exit 3 when any `DRIFT`/`MISSING`
-exists; with `--strict`, `UNMANAGED`/`UNKNOWN` also fail.
+exists; with `--strict`, `UNMANAGED`/`UNKNOWN` also fail. `--home <DIR>`
+overrides `$HOME` for home-resolved targets (default: `$HOME`); thread the
+same `--home` through the whole lifecycle (see §2.9.1).
 
 Human output:
 
@@ -340,11 +350,14 @@ JSON: one record per resource with `status` in
 
 ```
 configctl rollback [NAME|TARGET] [--plan <PLAN_ID>] [--last] [--list]
-                   [--yes] [--dry-run] [--json]
+                   [--home <DIR>] [--yes] [--dry-run] [--json]
 ```
 
 - `--list` shows rollback candidates from history (plan id, time, files);
   incompatible with `--last`.
+- `--home <DIR>` overrides `$HOME` for home-resolved rollback targets
+  (default: `$HOME`); thread the same `--home` through the whole lifecycle
+  (see §2.9.1).
 - `--last` rolls back the most recent persisted plan (any profile); cannot be
   combined with a positional target or `--plan`. The chosen plan is announced
   on stderr in human mode.
@@ -366,7 +379,7 @@ configctl env scan [PATH...] [--json]
 configctl env list [--project <P>] [--json]
 configctl env verify [NAME] [--project <P>] [--schema <FILE>] [--strict] [--json]
 configctl env explain [--home <DIR>] [--json]
-configctl env consolidate [PROFILE] [--mode include|move] [--dry-run] [--emit-patch <FILE>] [--home <DIR>] [--json]
+configctl env consolidate [PROFILE] [--mode include|move] [--dry-run] [--emit-patch <FILE>] [--backup-dir <DIR>] [--home <DIR>] [--json]
 ```
 
 `env explain` (v1.2) maps where environment declarations live under `$HOME`
@@ -388,20 +401,30 @@ journal, backup, rollback). Secret entries are never written to the canonical
 file, and `expected_before` guards make apply refuse a plan whose target
 changed since planning (exit 5). See [ENV_CONSOLIDATION.md](ENV_CONSOLIDATION.md).
 
-`env consolidate --mode move` (v1.2 E5) is assisted manual removal of the
+`env consolidate --mode move` (v1.2 E5, v1.3 polish) is assisted manual removal of the
 now-shadowed original lines — never automatic. `--dry-run` prints a per-file
 per-line tombstone preview and writes nothing. `--emit-patch <file>` writes a
 unified diff (apply by hand from `$HOME` with `patch -p0 < <file>`) plus one
-adjacent timestamped backup per touched file
-(`<rc-file>.configctl-bak-<UTC-seconds>`, `0600`, byte-identical), and prints
-the exact `cp -p` restore commands (`rollback` cannot restore an out-of-band
-patch). With neither flag it exits 2 with guidance. Only `managed` lines
+timestamped backup per touched file — adjacent to the rc file by default
+(`<rc-file>.configctl-bak-<UTC-seconds>`), or inside `--backup-dir <DIR>` as
+`<rc-basename>.configctl-bak-<UTC-seconds>` when given (the directory is
+created with parents if missing; a non-directory or non-writable dir is
+refused, exit 2). Backups are `0600`, byte-identical (verified after write),
+and the exact `cp -p` restore commands reference their real locations
+(`rollback` cannot restore an out-of-band patch). The per-line tombstones are
+deterministic (no timestamp); the emission second lives only in the patch
+header (`# Generated <UTC> by configctl env consolidate --mode move`), so
+re-emitting to the same path with an unchanged eligible set + file hashes is
+idempotent (exit 0, header refreshed) — compare excludes the header line.
+With neither flag it exits 2 with guidance. Only `managed` lines
 whose value byte-equals the canonical entry are eligible; secrets, PATH,
 conditionals, the include block itself, symlinks, oversize files, CRLF, and
 partial/spoofed marker blocks are refused with explicit reasons. Exit 0 even
 with zero eligible (NoOp); exit 5 on an existing differing patch file, a
-missing/stale canonical file, or a secret trip. `--emit-patch` with
-`--mode include` is a usage error (exit 2).
+missing/stale canonical file, or a secret trip. `--emit-patch`/`--backup-dir`
+with `--mode include` is a usage error (exit 2); `--backup-dir` without
+`--emit-patch` is a usage error (exit 2). The move JSON carries `backup_dir`
+(the requested dir, or null for adjacent).
 
 Move-mode examples:
 
@@ -418,6 +441,37 @@ Backups (0600, byte-identical to the pre-patch content):
   ~/.bashrc -> /home/user/.bashrc.configctl-bak-1759276800
 Restore (rollback cannot restore an out-of-band patch; run these yourself):
   cp -p '/home/user/.bashrc.configctl-bak-1759276800' '/home/user/.bashrc'
+```
+
+With `--backup-dir` the backups land in one place instead:
+
+```
+$ configctl env consolidate --mode move --emit-patch ~/move.patch --backup-dir ~/move-backups
+Wrote patch ~/move.patch (2 line(s) in 2 file(s)).
+Backups (0600, byte-identical to the pre-patch content):
+  ~/.bashrc -> /home/user/move-backups/.bashrc.configctl-bak-1759276800
+Restore (rollback cannot restore an out-of-band patch; run these yourself):
+  cp -p '/home/user/move-backups/.bashrc.configctl-bak-1759276800' '/home/user/.bashrc'
+```
+
+#### 2.9.1 Temp-HOME recipe
+
+`apply`, `verify`, `rollback` (and `undo`), plus `env consolidate` / `env
+explain`, all accept `--home <DIR>` (default: `$HOME`) and honor the same
+`--state-dir`. Thread one `--home` through the whole lifecycle so the plan's
+home-resolved paths and every later command agree — otherwise a plan built
+against `$T/home` and applied against the real `$HOME` is refused as stale
+(exit 5). Equivalent alternative: `export HOME=$T/home` once and drop the
+flags.
+
+```
+$ T=$(mktemp -d) && mkdir -p $T/home
+$ configctl env consolidate ./work --home $T/home --state-dir $T/state
+$ configctl apply --last --yes --home $T/home --state-dir $T/state
+$ configctl verify ./work --home $T/home
+$ configctl env consolidate --mode move --dry-run --home $T/home ./work
+$ configctl env consolidate --mode move --emit-patch $T/move.patch --home $T/home ./work
+$ configctl rollback --last --yes --home $T/home --state-dir $T/state
 ```
 
 `env verify` reports missing/invalid/unknown variables per the project schema
@@ -607,12 +661,13 @@ output location.
 ### 2.17 `configctl undo`
 
 ```
-configctl undo [--yes] [--dry-run] [--json]
+configctl undo [--home <DIR>] [--yes] [--dry-run] [--json]
 ```
 
 Alias for `rollback --last`: rolls back the most recent plan. Same approval,
 lock, journal, and fail-closed guards as `rollback`; refuses (exit 2/5) when
-the latest plan was never applied or was already rolled back.
+the latest plan was never applied or was already rolled back. `--home <DIR>`
+overrides `$HOME` exactly as in `rollback`.
 
 ---
 
@@ -664,6 +719,7 @@ Apply 6 operations to this machine? [y/N]
 | `env consolidate` (plan → apply → rollback), `verify` `envfile` provider | v1.2 E2 |
 | `env consolidate` shadowing report (`shadowed_declaration`) | v1.2 E3 |
 | `env consolidate --mode move --dry-run` / `--emit-patch` (assisted manual, no auto-apply) | v1.2 E5 |
+| `--home` on `apply`/`verify`/`rollback`/`undo`, `--backup-dir` on move `--emit-patch`, deterministic tombstones + idempotent re-emit | v1.3 polish |
 | `onboard` | v1.2 E4 |
 | `undo` (alias for `rollback --last`) | v1.2 E4 |
 

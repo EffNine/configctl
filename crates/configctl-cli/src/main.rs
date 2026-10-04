@@ -153,6 +153,11 @@ enum Cmd {
         /// Apply the most recent plan (instead of naming a plan ID)
         #[arg(long, conflicts_with_all = ["plan", "plan_flag"])]
         last: bool,
+        /// Override $HOME for home-resolved plan targets (default: $HOME).
+        /// Thread the same --home through consolidate, apply, verify, and
+        /// rollback for a temp-HOME lifecycle; otherwise $HOME is used.
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
         /// Approve the current plan non-interactively
         #[arg(short, long)]
         yes: bool,
@@ -171,6 +176,10 @@ enum Cmd {
         /// Profile name or path to a profile bundle directory
         #[arg(value_name = "PROFILE")]
         profile: String,
+        /// Override $HOME for home-resolved targets (default: $HOME).
+        /// Thread the same --home through the whole lifecycle.
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -211,6 +220,10 @@ enum Cmd {
         /// Roll back the most recent plan (instead of naming one)
         #[arg(long, conflicts_with_all = ["target", "plan_flag", "list"])]
         last: bool,
+        /// Override $HOME for home-resolved rollback targets (default: $HOME).
+        /// Thread the same --home through the whole lifecycle.
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
         /// Show rollback candidates without changing anything
         #[arg(long)]
         list: bool,
@@ -294,6 +307,9 @@ enum Cmd {
     },
     /// Undo the most recent plan (alias for `rollback --last`)
     Undo {
+        /// Override $HOME for home-resolved rollback targets (default: $HOME)
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
         /// Approve non-interactively
         #[arg(short, long)]
         yes: bool,
@@ -390,6 +406,10 @@ enum EnvCmd {
         /// Write a unified tombstone diff for --mode move (manual-only; never auto-applies)
         #[arg(long = "emit-patch", value_name = "FILE")]
         emit_patch: Option<String>,
+        /// Directory for timestamped move-mode backups
+        /// (default: adjacent to each rc file; created with parents if missing)
+        #[arg(long = "backup-dir", value_name = "DIR")]
+        backup_dir: Option<String>,
         #[arg(long = "home", value_name = "DIR")]
         home: Option<String>,
         #[arg(long)]
@@ -763,7 +783,9 @@ fn run(cli: Cli) -> ExitCode {
             adopt,
             json,
             last,
+            home,
         }) => {
+            let home_path = home.as_deref().map(std::path::Path::new);
             let out = if *last {
                 let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
                 match apply::resolve_last_plan(&state_dir) {
@@ -775,7 +797,7 @@ fn run(cli: Cli) -> ExitCode {
                             Some(&id),
                             None,
                             cli.state_dir.as_deref(),
-                            None,
+                            home_path,
                             *yes,
                             *dry_run,
                             adopt,
@@ -795,7 +817,7 @@ fn run(cli: Cli) -> ExitCode {
                     plan_arg.as_deref(),
                     plan_flag.as_deref(),
                     cli.state_dir.as_deref(),
-                    None,
+                    home_path,
                     *yes,
                     *dry_run,
                     adopt,
@@ -832,10 +854,16 @@ fn run(cli: Cli) -> ExitCode {
         }
         Some(Cmd::Verify {
             profile,
+            home,
             json,
             strict,
         }) => {
-            let out = verify::run_verify(profile, None, *strict, &runner);
+            let out = verify::run_verify(
+                profile,
+                home.as_deref().map(std::path::Path::new),
+                *strict,
+                &runner,
+            );
             match (&out.report, &out.error) {
                 (None, Some(e)) => {
                     if *json {
@@ -1022,22 +1050,52 @@ fn run(cli: Cli) -> ExitCode {
                 mode,
                 dry_run,
                 emit_patch,
+                backup_dir,
                 home,
                 json,
             } => {
                 let out = if mode == "move" {
+                    if backup_dir.is_some() && emit_patch.is_none() {
+                        let out = env::EnvConsolidateOutput {
+                            text: String::new(),
+                            data: serde_json::json!({}),
+                            error: Some(
+                                "--backup-dir requires --emit-patch <file> with --mode move"
+                                    .to_string(),
+                            ),
+                            exit_code: 2,
+                        };
+                        if *json {
+                            println!(
+                                "{}",
+                                configctl_cli::render::Envelope::error(
+                                    "env consolidate",
+                                    out.error.as_deref().unwrap_or(""),
+                                    "run `configctl env consolidate --dry-run`"
+                                )
+                                .to_json()
+                            );
+                        } else {
+                            eprintln!("error: {}", out.error.as_deref().unwrap_or(""));
+                        }
+                        return finish(2);
+                    }
                     env::run_env_consolidate_move(
                         profile.as_deref(),
                         home.as_deref().map(std::path::Path::new),
                         *dry_run,
                         emit_patch.as_deref().map(std::path::Path::new),
+                        backup_dir.as_deref().map(std::path::Path::new),
                     )
                 } else {
-                    if emit_patch.is_some() {
+                    if emit_patch.is_some() || backup_dir.is_some() {
                         let out = env::EnvConsolidateOutput {
                             text: String::new(),
                             data: serde_json::json!({}),
-                            error: Some("--emit-patch is only valid with --mode move".to_string()),
+                            error: Some(
+                                "--emit-patch/--backup-dir are only valid with --mode move"
+                                    .to_string(),
+                            ),
                             exit_code: 2,
                         };
                         if *json {
@@ -1302,7 +1360,9 @@ fn run(cli: Cli) -> ExitCode {
             dry_run,
             json,
             last,
+            home,
         }) => {
+            let home_path = home.as_deref().map(std::path::Path::new);
             let out = if *last {
                 let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
                 match rollback::resolve_last_plan(&state_dir) {
@@ -1315,7 +1375,7 @@ fn run(cli: Cli) -> ExitCode {
                             None,
                             false,
                             cli.state_dir.as_deref(),
-                            None,
+                            home_path,
                             *yes,
                             *dry_run,
                             *json,
@@ -1335,7 +1395,7 @@ fn run(cli: Cli) -> ExitCode {
                     plan_flag.as_deref(),
                     *list,
                     cli.state_dir.as_deref(),
-                    None,
+                    home_path,
                     *yes,
                     *dry_run,
                     *json,
@@ -1386,8 +1446,14 @@ fn run(cli: Cli) -> ExitCode {
                 (None, None) => finish(1),
             }
         }
-        Some(Cmd::Undo { yes, dry_run, json }) => {
+        Some(Cmd::Undo {
+            home,
+            yes,
+            dry_run,
+            json,
+        }) => {
             let state_dir = configctl_core::state::resolve_state_dir(cli.state_dir.as_deref());
+            let home_path = home.as_deref().map(std::path::Path::new);
             let out = match rollback::resolve_last_plan(&state_dir) {
                 Ok(id) => {
                     if !*json {
@@ -1398,7 +1464,7 @@ fn run(cli: Cli) -> ExitCode {
                         None,
                         false,
                         cli.state_dir.as_deref(),
-                        None,
+                        home_path,
                         *yes,
                         *dry_run,
                         *json,
@@ -1747,5 +1813,58 @@ mod tests {
     #[test]
     fn rejects_unknown_subcommand() {
         assert!(Cli::try_parse_from(["configctl", "definitely-not-a-command"]).is_err());
+    }
+
+    #[test]
+    fn lifecycle_commands_accept_home_flag() {
+        let cli = Cli::try_parse_from(["configctl", "apply", "--last", "--home", "/tmp/h"])
+            .expect("apply --home parses");
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Apply { home: Some(_), .. })
+        ));
+        let cli = Cli::try_parse_from(["configctl", "verify", "work", "--home", "/tmp/h"])
+            .expect("verify --home parses");
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Verify { home: Some(_), .. })
+        ));
+        let cli = Cli::try_parse_from(["configctl", "rollback", "--last", "--home", "/tmp/h"])
+            .expect("rollback --home parses");
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Rollback { home: Some(_), .. })
+        ));
+        let cli =
+            Cli::try_parse_from(["configctl", "undo", "--home", "/tmp/h"]).expect("undo parses");
+        assert!(matches!(cli.command, Some(Cmd::Undo { home: Some(_), .. })));
+    }
+
+    #[test]
+    fn move_mode_accepts_backup_dir_flag() {
+        let cli = Cli::try_parse_from([
+            "configctl",
+            "env",
+            "consolidate",
+            "--mode",
+            "move",
+            "--emit-patch",
+            "p.patch",
+            "--backup-dir",
+            "/tmp/bk",
+        ])
+        .expect("consolidate --backup-dir parses");
+        match cli.command {
+            Some(Cmd::Env {
+                cmd:
+                    EnvCmd::Consolidate {
+                        backup_dir: Some(d),
+                        ..
+                    },
+            }) => {
+                assert_eq!(d, "/tmp/bk");
+            }
+            _ => panic!("consolidate --backup-dir did not parse to the expected variant"),
+        }
     }
 }

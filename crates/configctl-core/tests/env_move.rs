@@ -174,12 +174,46 @@ fn patch_is_deterministic_for_a_fixed_timestamp() {
     let a = assess_move(tmp.path(), &es).expect("assess");
     assert_eq!(a.eligible.len(), 2);
     assert_eq!(build_patch(&a, 42), build_patch(&a, 42));
+    // Only the single header timestamp line varies across seconds; the
+    // tombstone body is stable, so re-emit is idempotent.
     assert_ne!(build_patch(&a, 42), build_patch(&a, 43));
+    assert!(configctl_core::envmove::patches_equivalent(
+        &build_patch(&a, 42),
+        &build_patch(&a, 43)
+    ));
     // Adjacent lines get correctly offset +line numbers (-1/+2 each).
     let patch = build_patch(&a, 42);
     assert!(patch.contains("@@ -1,1 +1,2 @@"), "{patch}");
     assert!(patch.contains("@@ -2,1 +3,2 @@"), "{patch}");
-    assert!(patch.contains("# configctl-move @42 UTC: EDITOR consolidated to"));
+    assert!(
+        patch.contains("# configctl-move EDITOR consolidated to"),
+        "{patch}"
+    );
+    assert!(
+        patch.starts_with("# Generated 42 by configctl env consolidate --mode move"),
+        "{patch}"
+    );
+}
+
+#[test]
+fn tombstone_body_is_deterministic_across_seconds() {
+    // No sleep, no flakiness: two builds with different header timestamps
+    // (as if emitted in different seconds) must share one body, so re-emit
+    // is idempotent. The clock is injected via the timestamp argument.
+    let es = entries(&[("EDITOR", "vim")]);
+    let body = format!("export EDITOR=vim\n{}", block());
+    let tmp = home_with(&es, &[(".bashrc", &body)]);
+    let a = assess_move(tmp.path(), &es).expect("assess");
+    let first = build_patch(&a, 1_700_000_000);
+    let second = build_patch(&a, 1_700_000_100);
+    assert_ne!(first, second, "headers carry different timestamps");
+    assert!(
+        configctl_core::envmove::patches_equivalent(&first, &second),
+        "bodies must match across seconds"
+    );
+    // Per-line tombstones carry no timestamp at all.
+    assert!(!configctl_core::envmove::tombstone_comment("EDITOR").contains("1700000000"));
+    assert!(!first.lines().any(|l| l.starts_with('+') && l.contains('@')));
 }
 
 #[test]

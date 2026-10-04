@@ -302,28 +302,40 @@ Flow (implemented, E5):
    and why it is safe. Strictly read-only; human and `--json` output.
 2. `configctl env consolidate --mode move --emit-patch <file>` writes a
    unified diff to `<file>` (applies with `patch -p0 < <file>` run from
-   `$HOME`) plus one timestamped adjacent backup per touched file:
-   `<rc-file>.configctl-bak-<UTC-epoch-seconds>`, mode `0600`,
-   byte-identical to the pre-patch content (verified after write). It prints
-   the exact restore commands (`cp -p '<backup>' '<original>'`), the source
-   file hashes, and the re-run guidance below. It never mutates an rc file
-   or the canonical file — only the patch file and the backups are written.
-   An existing patch file is refused (exit 5) unless byte-identical
-   (idempotent re-emit).
+   `$HOME`) plus one timestamped backup per touched file: adjacent by
+   default (`<rc-file>.configctl-bak-<UTC-epoch-seconds>`), or inside
+   `--backup-dir <DIR>` as `<rc-basename>.configctl-bak-<UTC-seconds>`
+   when given (the directory is created with parents if missing; a
+   non-directory or non-writable dir is refused, exit 2). Backups are mode
+   `0600`, byte-identical to the pre-patch content (verified after write).
+   It prints the exact restore commands (`cp -p '<backup>' '<original>'`,
+   pointing at the real backup locations), the source file hashes, and the
+   re-run guidance below. It never mutates an rc file or the canonical
+   file — only the patch file and the backups are written. An existing
+   patch file with a differing body is refused (exit 5); an equivalent
+   body (only the header timestamp differs) is idempotent — the file is
+   re-emitted (header refreshed) with exit 0.
+3. `configctl env consolidate --mode move` with neither `--dry-run` nor
+   `--emit-patch` exits 2 with guidance (manual-only by design).
+   `--backup-dir` without `--emit-patch` (or with `--mode include`) is a
+   usage error (exit 2).
 3. `configctl env consolidate --mode move` with neither `--dry-run` nor
    `--emit-patch` exits 2 with guidance (manual-only by design).
 4. The user applies the patch manually (`patch -p0 < file`) or not at all.
    `configctl rollback` cannot restore an out-of-band patch, so the tool
    prints the exact restore (`cp`) commands at emit time.
 
-Tombstone format (comment-out, never delete):
+Tombstone format (comment-out, never delete). Per-line tombstones are
+deterministic (no timestamp); the emission second lives only in the patch
+header, so re-emit is idempotent across seconds:
 
 ```diff
+# Generated 1759276800 by configctl env consolidate --mode move
 --- .bashrc	<sha256 before>
 +++ .bashrc	<sha256 before>.tombstoned
 @@ -4,1 +4,2 @@
 -export EDITOR=vim
-+# configctl-move @<UTC-secs> UTC: EDITOR consolidated to ~/.config/configctl/env.sh
++# configctl-move EDITOR consolidated to ~/.config/configctl/env.sh
 +# export EDITOR=vim
 ```
 
@@ -344,7 +356,20 @@ error, names the variable only); a missing or stale canonical
 TOCTOU note: the patch is point-in-time. Emit records every source file hash
 and prints "re-run `--dry-run` before applying; refuse to apply when the
 hashes no longer match". Rollback cannot restore an out-of-band patch (see
-T26); the printed `cp` restore commands are the recovery path.
+T26); the printed `cp` restore commands are the recovery path. Re-emit
+idempotency compares patch bodies excluding the single `# Generated …`
+header line: an unchanged eligible set + unchanged file hashes re-emits
+with exit 0, while a genuinely changed set still refuses (exit 5).
+
+v1.3 polish (no new engine op, E5 stays deliberately manual): `--backup-dir
+<DIR>` directs all timestamped backups into one directory (basename
+`<rc-basename>.configctl-bak-<UTC-seconds>`, `0600`, byte-identical,
+`cp -p` restore commands point there); the default stays adjacent for
+backward compatibility. `apply`, `verify`, `rollback` (and `undo`) accept
+`--home <DIR>` matching `env consolidate`/`env explain`, so one flag
+threaded through the lifecycle keeps plan paths consistent (a plan built
+against one home and applied against another is refused as stale, exit 5);
+`export HOME=$T/home` is the documented equivalent. See CLI_SPEC §2.9.1.
 
 Hard exclusions (never eligible for removal): PATH/special variables,
 conditional or nested lines, any line whose evaluation the parser could not
@@ -388,7 +413,7 @@ is read-only apart from writing the profile bundle.
 | Command | Purpose |
 |---|---|
 | `configctl env explain [--json] [--home DIR]` | mode 1 report |
-| `configctl env consolidate [--mode include\|move] [--dry-run] [--home DIR] [--json] [PROFILE]` | modes 2/3 |
+| `configctl env consolidate [--mode include\|move] [--dry-run] [--emit-patch FILE] [--backup-dir DIR] [--home DIR] [--json] [PROFILE]` | modes 2/3 |
 | `configctl env verify [--system]` | extend existing verify: canonical file hash, include blocks present, shadowed declarations reported |
 | `configctl onboard` | guided first run (§8) |
 | `configctl status` | one-line summary across profile + env (`verify` rollup) |
@@ -464,7 +489,7 @@ to an automatic apply path requires a separate threat review (see §7).
 | E2 | `EnvFileWrite` + `IncludeLineAdd` ops, plan/apply/rollback/verify | delivered in v1.2: both kinds wired end to end (`SAFE_REPRODUCE`, backed up, rollback byte-exact), `expected_before` TOCTOU guards, canonical file + `environment.d` kept in sync from one profile, `verify` checks the canonical file (`envfile` provider); idempotency + stale-plan refusal + rollback tests green |
 | E3 ✅ | `env consolidate` CLI + shadowing report | verified in v1.2: e2e on messy fixture home asserts `shadowed_declaration` warnings naming file and line |
 | E4 | `onboard` + `status` + `why` + `undo`/`--last` | delivered in v1.2: `onboard` (read-only + bundle only, refuses to overwrite), `status`/`why` shipped earlier, `apply --last`/`rollback --last` shipped earlier |
-| E5 ✅ | mode 3 assisted manual (patch emission) + threat review | delivered in v1.2: `--mode move --dry-run` preview (read-only) + `--mode move --emit-patch <file>` unified diff with adjacent `0600` backups and printed restore commands; threat review recorded as T26; no auto-apply path |
+| E5 ✅ | mode 3 assisted manual (patch emission) + threat review | delivered in v1.2: `--mode move --dry-run` preview (read-only) + `--mode move --emit-patch <file>` unified diff with adjacent `0600` backups and printed restore commands; threat review recorded as T26; no auto-apply path. v1.3 polish (still E5, no new phase label): `--backup-dir <DIR>` for directed backups, `--home` on `apply`/`verify`/`rollback`/`undo` for temp-HOME lifecycles, deterministic tombstones (timestamp only in the patch header) with idempotent re-emit |
 
 E1–E2 are the core; E4 is where the beginner value lands. E5 ships only after
 E1–E4 are in real use.

@@ -4,6 +4,38 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
+## [Unreleased]
+
+v1.3 UX polish batch (still E5 for move mode — no automatic apply path, no
+plan/state format changes, all defaults backward compatible).
+
+### Added
+
+- `env consolidate --mode move --emit-patch` accepts `--backup-dir <DIR>`:
+  all timestamped backups go there as `<rc-basename>.configctl-bak-<ts>`
+  (`0600`, byte-identical, verified; restore commands point at the new
+  locations) instead of landing adjacent to each rc file. The directory
+  (and parents) is created when missing; a non-directory or non-writable
+  dir is refused (exit 2 + guidance). The move JSON carries `backup_dir`
+  (dir, or null for adjacent).
+- `--home <DIR>` on `apply`, `verify`, `rollback`, and `undo`, matching the
+  existing flag on `env consolidate`/`env explain`/`onboard` (and honoring
+  `$HOME` when absent), so one flag threaded through the whole lifecycle
+  keeps plan paths consistent — a plan built against `$T/home` and applied
+  against another home is refused as stale (exit 5). `export HOME=$T/home`
+  is the documented equivalent (see `CLI_SPEC.md` §2.9.1 temp-HOME recipe).
+
+### Changed
+
+- Move-mode tombstones are deterministic: the UTC timestamp moved out of
+  the per-line tombstone (`# configctl-move <NAME> consolidated to
+  ~/.config/configctl/env.sh`) into a single patch-header line (`#
+  Generated <UTC> by configctl env consolidate --mode move`). Re-emitting
+  to the same path with an unchanged eligible set + file hashes is now
+  idempotent (exit 0, header refreshed; comparison excludes the header
+  line) instead of refused; a genuinely different eligible set still
+  refuses (exit 5).
+
 ## [1.2.0] — 2026-09-30
 
 Environment consolidation (v1.2), phases E1–E5.

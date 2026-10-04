@@ -371,26 +371,82 @@ fn assess_file(
     out.files.push(info);
 }
 
-/// Tombstone comment for one eligible line. Deterministic in
-/// (`timestamp_secs`, `name`): the same inputs always render the same patch.
-pub fn tombstone_comment(name: &str, timestamp_secs: i64) -> String {
-    format!(
-        "# configctl-move @{timestamp_secs} UTC: {name} consolidated to ~/.config/configctl/env.sh"
-    )
+/// Tombstone comment for one eligible line. Deterministic in `name`: the
+/// same name always renders the same patch body, so re-emission is idempotent
+/// across seconds. The emission timestamp lives only in the patch-file
+/// header (see [`build_patch`]), never in per-line tombstones.
+pub fn tombstone_comment(name: &str) -> String {
+    format!("# configctl-move {name} consolidated to ~/.config/configctl/env.sh")
+}
+
+/// Prefix of the single patch-header line carrying the emission timestamp.
+/// Re-emit idempotency compares patch bodies with this line stripped, so the
+/// header timestamp never forces a false conflict.
+pub const PATCH_HEADER_PREFIX: &str = "# Generated ";
+
+/// Resolve where the timestamped backup for `rel` (e.g. `.bashrc`) goes.
+/// With `backup_dir` all backups live there as
+/// `<rc-basename>.configctl-bak-<timestamp>`; without it the backup lands
+/// adjacent to the rc file (backward compatible).
+pub fn backup_path_for(
+    home: &Path,
+    rel: &str,
+    timestamp_secs: i64,
+    backup_dir: Option<&Path>,
+) -> std::path::PathBuf {
+    match backup_dir {
+        Some(dir) => {
+            let basename = Path::new(rel)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| rel.to_string());
+            dir.join(format!("{basename}.configctl-bak-{timestamp_secs}"))
+        }
+        None => {
+            let abs = home.join(rel);
+            abs.with_extension(format!(
+                "{}configctl-bak-{timestamp_secs}",
+                abs.extension()
+                    .map(|x| format!("{}.", x.to_string_lossy()))
+                    .unwrap_or_default()
+            ))
+        }
+    }
+}
+
+/// Patch body with the single `# Generated …` header timestamp line removed.
+/// Used to decide re-emit idempotency: same eligible set + same file hashes
+/// means the same body, even when the header timestamp differs.
+pub fn patch_body_without_header(patch: &str) -> String {
+    patch
+        .lines()
+        .filter(|l| !l.starts_with(PATCH_HEADER_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// True when two emitted patches describe the same change (eligible set +
+/// file hashes identical), ignoring only the header timestamp line.
+pub fn patches_equivalent(a: &str, b: &str) -> bool {
+    patch_body_without_header(a) == patch_body_without_header(b)
 }
 
 /// Render the assisted-manual patch for an assessment as a unified diff, so
 /// `patch -p0 < file` (run from `$HOME`) applies it.
 ///
-/// Pure and deterministic: the same assessment plus timestamp always yields
-/// the same bytes. One hunk per eligible line (`-1/+2`), with `+` line
-/// numbers adjusted for earlier tombstones in the same file. Per-file notes
-/// name the content hash and the shadowing fact; the leading comment block
-/// carries the point-in-time warning. No values appear except the raw
-/// eligible (managed, non-secret) source lines being tombstoned.
+/// Pure and deterministic in the eligible set: the same assessment always
+/// yields the same body. The only timestamp-bearing line is the single
+/// `# Generated <UTC> by configctl env consolidate --mode move` header;
+/// per-line tombstones are deterministic (see [`tombstone_comment`]). One
+/// hunk per eligible line (`-1/+2`), with `+` line numbers adjusted for
+/// earlier tombstones in the same file. Per-file notes name the content hash
+/// and the shadowing fact; the leading comment block carries the
+/// point-in-time warning. No values appear except the raw eligible (managed,
+/// non-secret) source lines being tombstoned.
 pub fn build_patch(assessment: &MoveAssessment, timestamp_secs: i64) -> String {
-    let mut s = String::from(
-        "# configctl move patch (assisted manual, mode 3) — review every hunk before applying.\n\
+    let mut s = format!(
+        "# Generated {timestamp_secs} by configctl env consolidate --mode move\n\
+         # configctl move patch (assisted manual, mode 3) — review every hunk before applying.\n\
          # Point-in-time: re-run `configctl env consolidate --mode move --dry-run` before applying;\n\
          # refuse to apply when the file hashes below no longer match.\n\
          # Apply from $HOME with: patch -p0 < <this file>\n\
@@ -424,10 +480,7 @@ pub fn build_patch(assessment: &MoveAssessment, timestamp_secs: i64) -> String {
             let plus_line = e.line + i;
             s.push_str(&format!("@@ -{},1 +{},2 @@\n", e.line, plus_line));
             s.push_str(&format!("-{}\n", e.original));
-            s.push_str(&format!(
-                "+{}\n",
-                tombstone_comment(&e.name, timestamp_secs)
-            ));
+            s.push_str(&format!("+{}\n", tombstone_comment(&e.name)));
             s.push_str(&format!("+# {}\n", e.original));
         }
     }
@@ -449,14 +502,41 @@ mod tests {
 
     #[test]
     fn tombstones_are_deterministic() {
+        assert_eq!(tombstone_comment("EDITOR"), tombstone_comment("EDITOR"));
+        assert_ne!(tombstone_comment("EDITOR"), tombstone_comment("LANG"));
+        // No timestamp leaks into the per-line tombstone.
+        assert!(!tombstone_comment("EDITOR").contains('@'));
+    }
+
+    #[test]
+    fn backup_paths_resolve_both_modes() {
+        let home = Path::new("/home/user");
+        // Adjacent (default): next to the rc file.
+        let adjacent = backup_path_for(home, ".bashrc", 42, None);
+        assert_eq!(adjacent, home.join(".bashrc.configctl-bak-42"));
+        // Directed: basename preserved inside the backup dir.
+        let dir = Path::new("/tmp/backups");
+        let directed = backup_path_for(home, ".bashrc", 42, Some(dir));
+        assert_eq!(directed, dir.join(".bashrc.configctl-bak-42"));
+        let directed_z = backup_path_for(home, ".zshrc", 7, Some(dir));
+        assert_eq!(directed_z, dir.join(".zshrc.configctl-bak-7"));
+    }
+
+    #[test]
+    fn patch_bodies_are_stable_across_timestamps() {
+        // Two builds with different header timestamps share one body.
+        let body_a = "# Generated 42 by configctl env consolidate --mode move\n-foo\n";
+        let body_b = "# Generated 43 by configctl env consolidate --mode move\n-foo\n";
+        assert!(patches_equivalent(body_a, body_b));
+        assert_ne!(body_a, body_b);
         assert_eq!(
-            tombstone_comment("EDITOR", 1),
-            tombstone_comment("EDITOR", 1)
+            patch_body_without_header(body_a),
+            patch_body_without_header(body_b)
         );
-        assert_ne!(
-            tombstone_comment("EDITOR", 1),
-            tombstone_comment("EDITOR", 2)
-        );
-        assert_ne!(tombstone_comment("EDITOR", 1), tombstone_comment("LANG", 1));
+        // A genuinely different body is not equivalent.
+        assert!(!patches_equivalent(
+            body_a,
+            "# Generated 43 by configctl env consolidate --mode move\n-bar\n"
+        ));
     }
 }
