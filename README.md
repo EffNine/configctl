@@ -1,3 +1,5 @@
+[![CI](https://github.com/EffNine/configctl/actions/workflows/ci.yml/badge.svg)](https://github.com/EffNine/configctl/actions/workflows/ci.yml)
+
 # configctl — Linux Environment Manager
 
 > Discover, organize, reproduce, and verify everything a Linux development

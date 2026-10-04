@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.0)"
+        required: false
+        default: "v1.2.0"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Dispatch builds the tag's commit, not main's tip; on tag-push this is a no-op (ref already equals the tag).
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97"
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Resolve tag and version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        env:
+          # Only read when compiling for aarch64; harmless (ignored) on x86_64 builds.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package tarball and checksums
+        run: |
+          cp "target/${{ matrix.target }}/release/configctl" ./configctl
+          tar -czf "configctl-${{ env.VERSION }}-${{ matrix.target }}.tar.gz" configctl LICENSE-MIT README.md
+          rm ./configctl
+          sha256sum *.tar.gz > "SHA256SUMS-${{ matrix.target }}.txt"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: |
+            configctl-*.tar.gz
+            SHA256SUMS-*.txt
