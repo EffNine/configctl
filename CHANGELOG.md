@@ -36,6 +36,37 @@ plan/state format changes, all defaults backward compatible).
   line) instead of refused; a genuinely different eligible set still
   refuses (exit 5).
 
+### Robustness
+
+- Timing-flake hardening (no behavior change): the subprocess wait loop no
+  longer busy-spins (steady 5 ms polls, same kill deadline and bounded 2 s
+  reap), the `sleep`-kill test SKIPs cleanly when `sleep` is absent and
+  asserts the deadline was honored (lower bound) as well as the generous
+  kill ceiling, the `yes` ceiling is documented as hang-catch only, bench
+  suites now assert work-done counts (files/projects/symlinks, depth-limit
+  engagement) alongside their 120 s ceilings, and the `yes`-cap unit test
+  SKIPs when `yes` is absent. Proven with 20/20 green repeats of the
+  `stress`, `bench`, and command-runner suites plus 3 full-workspace runs.
+- Envmap parser corpus (`configctl-core/tests/fixtures/envmap/` + golden
+  snapshot tests): Ubuntu `.bashrc`, zsh `.zshrc`, PATH-mangling
+  `.profile`, CRLF, BOM + non-ASCII, near-limit (~1 MiB, generated), and a
+  permission-denied case pin exact classification sequences, prove secret
+  values reach no output (structured, JSON, or `Debug`), and prove
+  determinism (parse twice → identical); a dependency-free fuzz-lite test
+  feeds adversarial fragments (unclosed quotes, lone `\`, NUL bytes,
+  10k-char lines, `$(…)`/backticks/`${…}`) asserting no panic and exactly
+  one classification per substantive line. One consistency fix: a leading
+  BOM is now stripped (same discipline as the `.env` parser) instead of
+  corrupting the first line's name.
+- Exit-code conformance (CLI_SPEC §1.1 is the contract): `capture` refusing
+  a non-empty output directory without `--force` now exits 5 (was 2),
+  matching the documented code and `onboard`; a plan that builds but fails
+  to persist now exits 1 instead of a false 0. New
+  `crates/configctl-cli/tests/exit_codes_e2e.rs` pins usage (2), verify
+  drift (3), approval decline (4), stale/tampered/unknown plans (5),
+  secret-backend-unavailable (6), secrets-list degradation (0 +
+  `backend_error`), and success paths (0).
+
 ## [1.2.0] — 2026-09-30
 
 Environment consolidation (v1.2), phases E1–E5.

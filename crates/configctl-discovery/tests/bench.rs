@@ -10,7 +10,11 @@ use configctl_core::governor::GovernorBudgets;
 use configctl_discovery::scanner::{ScanOptions, Scanner};
 use std::time::Instant;
 
-fn bench_scan(label: &str, root: &std::path::Path, ceiling_secs: u64) {
+fn bench_scan(
+    label: &str,
+    root: &std::path::Path,
+    ceiling_secs: u64,
+) -> configctl_discovery::scanner::ScanResult {
     let runner = FakeCommandRunner::new();
     let mut scanner = Scanner::new();
     let opts = ScanOptions {
@@ -33,10 +37,15 @@ fn bench_scan(label: &str, root: &std::path::Path, ceiling_secs: u64) {
         result.completeness.completeness_pct(),
         result.completeness.status,
     );
+    // Generous ceiling only (typical here is well under a second; 120s is
+    // 100x+): it catches hangs/regressions, never CI variance. The
+    // per-bench count asserts below carry the proof that real work happened —
+    // a fast failure must not pass on time alone.
     assert!(
         elapsed.as_secs() < ceiling_secs,
         "{label} exceeded {ceiling_secs}s: {elapsed:?}"
     );
+    result
 }
 
 #[test]
@@ -50,7 +59,12 @@ fn bench_10k_files() {
         }
         std::fs::write(dir.join("Cargo.toml"), b"[package]\n").unwrap();
     }
-    bench_scan("10k-files", tmp.path(), 120);
+    let done = bench_scan("10k-files", tmp.path(), 120);
+    assert!(
+        done.filesystem.counters.files >= 10_000,
+        "10k fixture must be fully walked, got {}",
+        done.filesystem.counters.files
+    );
 }
 
 #[test]
@@ -63,7 +77,12 @@ fn bench_many_small_projects() {
         std::fs::write(proj.join(".env"), b"PORT=3000\n").unwrap();
         std::fs::write(proj.join("README.md"), b"# hi\n").unwrap();
     }
-    bench_scan("50-projects", tmp.path(), 120);
+    let done = bench_scan("50-projects", tmp.path(), 120);
+    assert!(
+        done.projects.len() >= 50,
+        "50-project fixture must be fully discovered, got {}",
+        done.projects.len()
+    );
 }
 
 #[test]
@@ -77,7 +96,12 @@ fn bench_symlink_heavy_tree() {
         )
         .unwrap();
     }
-    bench_scan("2000-symlinks", tmp.path(), 120);
+    let done = bench_scan("2000-symlinks", tmp.path(), 120);
+    assert!(
+        done.filesystem.counters.symlinks >= 2000,
+        "symlink fixture must be fully walked, got {}",
+        done.filesystem.counters.symlinks
+    );
 }
 
 #[test]
@@ -89,5 +113,15 @@ fn bench_deep_tree() {
     }
     std::fs::create_dir_all(&p).unwrap();
     std::fs::write(p.join("leaf.txt"), b"x\n").unwrap();
-    bench_scan("200-deep", tmp.path(), 120);
+    let done = bench_scan("200-deep", tmp.path(), 120);
+    // The 200-level tree exceeds the walker's depth bound by design: the
+    // bound must engage (PARTIAL + depth_limit) instead of hanging.
+    assert!(
+        done.statistics
+            .stop_reasons
+            .iter()
+            .any(|r| r == "depth_limit"),
+        "deep tree must stop at the depth limit, got {:?}",
+        done.statistics.stop_reasons
+    );
 }

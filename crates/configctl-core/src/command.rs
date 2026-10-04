@@ -219,13 +219,12 @@ impl CommandRunner for StdCommandRunner {
 /// scanner — it is reported timed-out and left for init to reap.
 fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
     let start = std::time::Instant::now();
-    let deadline_poll = timeout / 4;
-    let last_poll = timeout.max(Duration::from_millis(200));
+    let deadline = timeout.max(Duration::from_millis(200));
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.code(),
             Ok(None) => {
-                if start.elapsed() >= last_poll {
+                if start.elapsed() >= deadline {
                     // Best-effort kill; report timeout honestly.
                     let _ = child.kill();
                     // Bounded reap: 2s grace, then give up waiting (never hang).
@@ -238,9 +237,11 @@ fn wait_with_deadline(child: &mut Child, timeout: Duration) -> Option<i32> {
                     }
                     return None;
                 }
-                if start.elapsed() >= deadline_poll {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
+                // Steady small sleep on every poll (never a busy spin): the
+                // deadline check stays responsive while parallel scans/tests
+                // no longer pay a spinning core per live child, which keeps
+                // wall-clock variance down under load.
+                std::thread::sleep(Duration::from_millis(5));
             }
             Err(_) => return None,
         }

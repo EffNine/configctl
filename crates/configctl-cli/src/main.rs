@@ -698,7 +698,7 @@ fn run(cli: Cli) -> ExitCode {
                         let msg = err.errors.first().map(|w| w.message.as_str()).unwrap_or("");
                         eprintln!("error: {}", out.registry.redact(msg));
                     }
-                    finish(2)
+                    finish(out.exit_code as u8)
                 }
                 None => {
                     let registry = &out.registry;
@@ -734,7 +734,7 @@ fn run(cli: Cli) -> ExitCode {
                             print!("{text}");
                         }
                     }
-                    finish(0)
+                    finish(out.exit_code as u8)
                 }
             }
         }
@@ -746,7 +746,7 @@ fn run(cli: Cli) -> ExitCode {
         }) => {
             let out = plan::run_plan(profile, cli.state_dir.as_deref(), None, &runner, None, None);
             match (&out.plan, &out.error) {
-                (_, Some(err)) if out.plan.is_none() => {
+                (None, Some(err)) => {
                     if *json {
                         let env =
                             configctl_cli::render::Envelope::error("plan", &err.message, &err.hint);
@@ -756,7 +756,21 @@ fn run(cli: Cli) -> ExitCode {
                     }
                     finish(2)
                 }
-                (Some(p), _) => {
+                (Some(_), Some(err)) => {
+                    // The plan was built but could not be persisted (state
+                    // directory unwritable, conflicting overwrite, …): fail
+                    // closed as an internal error, never exit 0 with a plan
+                    // id that does not exist.
+                    if *json {
+                        let env =
+                            configctl_cli::render::Envelope::error("plan", &err.message, &err.hint);
+                        println!("{}", env.to_json());
+                    } else {
+                        eprintln!("error: {}", err.message);
+                    }
+                    finish(1)
+                }
+                (Some(p), None) => {
                     if *json {
                         let envelope = configctl_cli::render::Envelope::plan_ok(p);
                         let s = envelope.to_json();

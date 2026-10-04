@@ -60,7 +60,30 @@ fn std_runner_output_cap_bounds_stream() {
     let mut req = CommandRequest::new("yes", ["A"]).timeout(std::time::Duration::from_secs(5));
     req.output_cap = Some(100);
     let runner = StdCommandRunner::new();
-    let out = runner.run(&req).unwrap();
+    // `yes` may be missing on exotic systems — SKIP, never fail, there.
+    let out = match runner.run(&req) {
+        Err(_) => {
+            eprintln!("SKIP: `yes` unavailable");
+            return;
+        }
+        Ok(out) => out,
+    };
     assert!(out.truncated, "output cap must be reported as truncated");
     assert!(out.stdout.len() <= 100, "stdout must not exceed cap");
+}
+
+#[test]
+fn std_runner_short_timeout_does_not_fire_early() {
+    // A fast command under a generous deadline must succeed normally: the
+    // deadline kills hung processes, never quick ones.
+    let runner = StdCommandRunner::with_defaults(std::time::Duration::from_secs(30), 64 * 1024);
+    let out = runner
+        .run(&CommandRequest::new("echo", ["hello"]))
+        .expect("echo must spawn");
+    assert_eq!(out.status, Some(0));
+    assert!(
+        !out.timed_out,
+        "fast command must not be reported timed out"
+    );
+    assert_eq!(out.stdout.trim(), "hello");
 }

@@ -22,11 +22,22 @@ pub struct CaptureOutput {
     pub out_dir: PathBuf,
     /// Whether this was a dry run (no writes).
     pub dry_run: bool,
-    /// Usage/validation error envelope (exit 2), if any.
+    /// Usage/validation error envelope, if any.
     pub error_envelope: Option<crate::render::Envelope>,
+    /// CLI exit code (see CLI_SPEC §1.1): 0 on success, 2 on usage/other
+    /// errors, 5 when a non-empty output directory is refused without
+    /// `--force` (conflict-class, matching `onboard` and the CLI spec).
+    pub exit_code: i32,
     /// The redaction registry populated during scan; callers redact every
     /// sink before output.
     pub registry: std::sync::Arc<configctl_core::redact::SecretRegistry>,
+}
+
+/// True when the directory exists and already holds anything.
+fn non_empty_dir(p: &Path) -> bool {
+    std::fs::read_dir(p)
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false)
 }
 
 /// Resolve the profile name: explicit `name` arg wins; otherwise the output
@@ -132,6 +143,27 @@ pub fn run_capture_with_governor(
             .join("configctl-profile"),
     };
     let profile_name = resolve_name(name, &out_dir);
+    // Fail fast on an overwrite refusal (exit 5, conflict-class per CLI_SPEC
+    // §2.3) before the expensive discovery scan: nothing is read, nothing is
+    // written. `--dry-run` previews without writing, so it is exempt; the
+    // write-time refusal below stays as the fail-closed backstop (exit 2) for
+    // the residual race where the directory fills between this check and the
+    // write.
+    if !dry_run && !force && non_empty_dir(&out_dir) {
+        return CaptureOutput {
+            result: None,
+            written: Vec::new(),
+            out_dir,
+            dry_run,
+            error_envelope: Some(crate::render::Envelope::error(
+                "capture",
+                "output directory is not empty (refusing to overwrite; use --force)",
+                "re-run with --force to overwrite, or choose an empty --output directory",
+            )),
+            exit_code: 5,
+            registry: std::sync::Arc::new(configctl_core::redact::SecretRegistry::default()),
+        };
+    }
     if let Err(e) = configctl_core::paths::validate_profile_name(&profile_name) {
         return CaptureOutput {
             result: None,
@@ -143,6 +175,7 @@ pub fn run_capture_with_governor(
                 &e,
                 "use --output <DIR> and an optional NAME matching [a-z0-9][a-z0-9-_]{0,63}",
             )),
+            exit_code: 2,
             registry: std::sync::Arc::new(configctl_core::redact::SecretRegistry::default()),
         };
     }
@@ -186,6 +219,7 @@ pub fn run_capture_with_governor(
                 "no scan roots available",
                 "pass --from <PATH> to select what to capture",
             )),
+            exit_code: 2,
             registry: std::sync::Arc::new(configctl_core::redact::SecretRegistry::default()),
         };
     }
@@ -234,6 +268,7 @@ pub fn run_capture_with_governor(
                     &e,
                     "fix the reported issue and re-run capture",
                 )),
+                exit_code: 2,
                 registry,
             };
         }
@@ -249,6 +284,7 @@ pub fn run_capture_with_governor(
             out_dir,
             dry_run: true,
             error_envelope: None,
+            exit_code: 0,
             registry,
         };
     }
@@ -259,6 +295,7 @@ pub fn run_capture_with_governor(
             out_dir,
             dry_run: false,
             error_envelope: None,
+            exit_code: 0,
             registry,
         },
         Err(e) => {
@@ -273,6 +310,7 @@ pub fn run_capture_with_governor(
                     &e,
                     "re-run with --force to overwrite, or choose an empty --output directory",
                 )),
+                exit_code: 2,
                 registry,
             }
         }

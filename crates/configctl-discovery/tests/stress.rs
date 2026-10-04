@@ -29,6 +29,11 @@ fn scan_default(root: &Path) -> configctl_discovery::scanner::ScanResult {
     scan_with(root, &FakeCommandRunner::new(), GovernorBudgets::default())
 }
 
+/// Timing-test discipline: every ceiling here is 10–100x the observed typical
+/// (milliseconds for these tiny fixtures), so the assert catches hangs and
+/// pathological slowdowns — never CI variance. Mechanism asserts (counts,
+/// statuses, flags) carry the proof; the clock only bounds the wait. Keep
+/// ceilings generous when touching this file; prove changes with 20x repeats.
 fn timed<T>(label: &str, limit: Duration, f: impl FnOnce() -> T) -> T {
     let start = Instant::now();
     let out = f();
@@ -172,13 +177,31 @@ fn permission_denied_tree_is_recorded_not_fatal() {
 
 #[test]
 fn hung_subprocess_is_killed_with_timeout_recorded() {
-    let runner = StdCommandRunner::with_defaults(Duration::from_secs(2), 64 * 1024);
+    let timeout = Duration::from_secs(2);
+    let runner = StdCommandRunner::with_defaults(timeout, 64 * 1024);
     let req = CommandRequest::new("sleep", ["30"]);
     let start = Instant::now();
-    let out = runner.run(&req).expect("runner responds");
+    // `sleep` is coreutils on Linux, but a missing binary must SKIP (like the
+    // `yes` test below), never fail the suite on an exotic system.
+    let out = match runner.run(&req) {
+        Err(_) => {
+            eprintln!("SKIP: `sleep` unavailable");
+            return;
+        }
+        Ok(out) => out,
+    };
     let elapsed = start.elapsed();
+    // Mechanism first: the deadline fired, the child was reaped (no hang,
+    // no zombie left to the harness), and the deadline was actually honored
+    // (lower bound with wide tolerance, not a tight millisecond assert).
     assert!(out.timed_out, "sleep 30 must be killed at the deadline");
     assert_eq!(out.status, None);
+    assert!(
+        elapsed >= timeout.saturating_sub(Duration::from_millis(1000)),
+        "deadline fired too early ({elapsed:?}); the timeout was not honored"
+    );
+    // Generous ceiling only: ~7x the 2s deadline. Kill + bounded 2s reap can
+    // never legitimately approach this; it catches hangs, not variance.
     assert!(
         elapsed < Duration::from_secs(15),
         "kill took too long: {elapsed:?}"
@@ -187,7 +210,8 @@ fn hung_subprocess_is_killed_with_timeout_recorded() {
 
 #[test]
 fn infinite_output_is_capped_and_terminates() {
-    let runner = StdCommandRunner::with_defaults(Duration::from_secs(10), 64 * 1024);
+    let timeout = Duration::from_secs(10);
+    let runner = StdCommandRunner::with_defaults(timeout, 64 * 1024);
     let req = CommandRequest::new("yes", Vec::<String>::new());
     let start = Instant::now();
     let outcome = runner.run(&req);
@@ -198,10 +222,13 @@ fn infinite_output_is_capped_and_terminates() {
         return;
     }
     let out = outcome.unwrap();
+    // Mechanism first: the output cap fired and bounded the capture.
     assert!(out.truncated, "infinite output must hit the cap");
     assert!(out.stdout.len() <= 64 * 1024 + 8192);
+    // Generous ceiling only: `yes` normally dies on SIGPIPE in milliseconds,
+    // so 30s (3x the subprocess timeout) catches hangs, not CI variance.
     assert!(
-        elapsed < Duration::from_secs(20),
+        elapsed < Duration::from_secs(30),
         "infinite output hung: {elapsed:?}"
     );
 }

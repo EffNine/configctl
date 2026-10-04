@@ -362,6 +362,10 @@ fn unbalanced_quotes(value: &str) -> bool {
 
 /// Parse a source file body into an [`EnvSource`]. Pure and total.
 pub fn parse_source(name: &str, content: &str, kind: SourceKind, read_order: u32) -> EnvSource {
+    // Drop a leading BOM so `FOO=bar` is not seen as `\u{feff}FOO=bar`
+    // (same discipline as the `.env` parser; BOM files are common from
+    // Windows editors and must not corrupt the first line's name).
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let mut declarations = Vec::new();
     let mut depth: usize = 0;
     let mut continuation = false;

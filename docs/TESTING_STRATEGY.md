@@ -168,6 +168,18 @@ depth/file/total caps, subprocess output caps and timeouts, and malformed
 `.env`/profile corpora that must never panic. Full-scale benchmark fixtures
 are deferred.
 
+### 8.1 Timing-test discipline
+
+Wall-clock asserts catch hangs, never CI variance: every ceiling is 3–100x
+the observed typical (documented next to the assert), mechanism asserts
+(counts, statuses, flags) carry the proof, and the clock only bounds the
+wait. Prefer poll-until-with-deadline where the intent is "eventually
+happens"; keep a generous ceiling where the intent is a hard bound (kill
+responsiveness, bench regressions). Never `#[ignore]` a timing test to make
+CI green. Timing-sensitive suites (`stress`, `bench`, command-runner) are
+proven with 20 consecutive green repeats plus full-workspace runs before the
+hardening is declared done.
+
 ## 9. CI gates per milestone (actual)
 
 | Gate | Requirement |
