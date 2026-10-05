@@ -15,7 +15,9 @@
 //! | secrets list with no backend            → 0 + backend_error statuses     ✓ |
 //! | clean verify / apply / capture / list   → 0 | success                    ✓ |
 
-use configctl_cli::commands::{apply as apply_cmd, plan as plan_cmd, secrets as secrets_cmd};
+use configctl_cli::commands::{
+    apply as apply_cmd, doctor as doctor_cmd, plan as plan_cmd, secrets as secrets_cmd,
+};
 use configctl_core::command::FakeCommandRunner;
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -480,4 +482,37 @@ fn init_refusal_without_force_is_exit_2() {
         Some(tmp.path().join("state2").to_str().unwrap()),
     );
     assert_eq!(second.exit_code, 2);
+}
+
+// --- v1.3.1: doctor on a fresh machine is OK, not UNUSABLE ------------------
+
+#[test]
+fn doctor_on_fresh_state_dir_is_ok() {
+    // The state dir is created lazily by the first mutating command; its
+    // absence must not be reported as UNUSABLE (exit 1) — `doctor` is
+    // advertised as a first-run command and must stay read-only.
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state"); // deliberately does not exist
+    let out = doctor_cmd::run_doctor(Some(state.to_str().unwrap()), &runner());
+    assert!(
+        out.state_ok,
+        "fresh state dir must be OK, got error: {:?}",
+        out.error
+    );
+    assert_eq!(out.plans, 0);
+    assert!(out.interrupted.is_empty());
+    assert!(!state.exists(), "doctor must not create the state dir");
+}
+
+#[test]
+fn doctor_on_unreadable_state_still_reports_unusable() {
+    // Regression guard: a state dir that exists but cannot be read must keep
+    // reporting UNUSABLE (the fresh-dir fix must not swallow real faults).
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("state.db"), b"this is not a sqlite database").unwrap();
+    let out = doctor_cmd::run_doctor(Some(state.to_str().unwrap()), &runner());
+    assert!(!out.state_ok, "corrupt state must be UNUSABLE");
+    assert!(out.error.is_some());
 }

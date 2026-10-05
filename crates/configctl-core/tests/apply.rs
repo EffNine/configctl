@@ -283,6 +283,11 @@ fn toctou_guard_aborts_on_changed_file() {
         std::fs::read_to_string(fx.home.join(".gitconfig")).unwrap(),
         "v2-evil\n"
     );
+    // v1.3.1: the op-level refusal happens after approval but before any
+    // write; the plan returns to `approved` (no phantom `partial`, no
+    // pointless recovery flow).
+    let (_, status, _) = configctl_core::state::load_plan(&fx.state, "p-toctou").unwrap();
+    assert_eq!(status, "approved");
 }
 
 #[test]
@@ -350,6 +355,10 @@ fn stale_profile_is_refused() {
         configctl_core::apply::ApplyError::Conflict(_)
     ));
     assert!(!fx.home.join(".gitconfig").exists());
+    // A refusal before approval (bundle payload edited after planning) leaves
+    // the plan as it was: `planned`, no phantom `partial`.
+    let (_, status, _) = configctl_core::state::load_plan(&fx.state, "p-stale").unwrap();
+    assert_eq!(status, "planned");
 }
 
 #[test]

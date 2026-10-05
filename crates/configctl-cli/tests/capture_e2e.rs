@@ -445,3 +445,110 @@ fn malformed_env_handled_safely() {
     let text = std::fs::read_to_string(&schema_path).unwrap();
     assert!(text.contains("GOOD"));
 }
+
+// --- F1 (v1.3.1): secret-bearing home payloads are excluded, never copied ---
+
+/// Scoped `HOME` override for the CLI capture path (which reads the process
+/// `HOME`). Serialized so env mutations never race within this binary.
+struct HomeGuard {
+    _g: std::sync::MutexGuard<'static, ()>,
+    prev: Option<std::ffi::OsString>,
+}
+
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+impl HomeGuard {
+    fn set(home: &Path) -> Self {
+        let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        Self { _g: g, prev }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
+#[test]
+fn secret_bearing_dotfile_excluded_from_dry_run_and_bundle() {
+    // F1 reproduction (field validation): a home dotfile whose *content*
+    // contains a registered secret value must be excluded before anything is
+    // written. Dry-run must not list it as "would write"; the real capture
+    // must succeed (not abort mid-write) with a clean bundle.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let canary = "sk-live-canary-bashrc-9f3a2b7c";
+    std::fs::write(
+        home.join(".bashrc"),
+        format!("export GITHUB_TOKEN={canary}\nexport EDITOR=vim\n"),
+    )
+    .unwrap();
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Test\n").unwrap();
+    // A project .env registers the same value in the scanner's registry.
+    let proj = root.join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join(".env"), format!("GITHUB_TOKEN={canary}\n")).unwrap();
+
+    let runner = FakeCommandRunner::new();
+    let _home_guard = HomeGuard::set(&home);
+
+    // Dry run: the file is excluded, never previewed as a write.
+    let out_dry = root.join("out-dry");
+    let dry = capture::run_capture(
+        Some("fixture"),
+        &[root.to_string_lossy().into_owned()],
+        &[],
+        Some(&out_dry.to_string_lossy()),
+        false,
+        None,
+        true,
+        None,
+        &runner,
+    );
+    assert!(dry.error_envelope.is_none());
+    assert!(
+        !dry.written.iter().any(|w| w.contains("bashrc")),
+        "dry-run listed a secret-bearing file as a write: {:?}",
+        dry.written
+    );
+    assert!(!out_dry.exists(), "dry-run must not create the output dir");
+    let dry_res = dry.result.as_ref().unwrap();
+    assert!(dry_res
+        .summary
+        .excluded
+        .iter()
+        .any(|e| e.contains(".bashrc") && e.contains("secret value")));
+
+    // Real capture: succeeds with the file excluded; bundle carries no canary.
+    let out = root.join("out");
+    let cap = capture::run_capture(
+        Some("fixture"),
+        &[root.to_string_lossy().into_owned()],
+        &[],
+        Some(&out.to_string_lossy()),
+        false,
+        None,
+        false,
+        None,
+        &runner,
+    );
+    assert!(
+        cap.error_envelope.is_none(),
+        "capture must succeed with the file excluded: {:?}",
+        cap.error_envelope
+    );
+    assert!(!out.join("files/home/bashrc").exists());
+    assert!(out.join("files/home/gitconfig").exists());
+    assert!(
+        !bundle_contains(&out, canary),
+        "canary leaked into the bundle"
+    );
+}

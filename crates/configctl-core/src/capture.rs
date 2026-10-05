@@ -194,6 +194,18 @@ pub fn run_capture(
                         }
                         _ => {}
                     }
+                    // Secret-value screen (fail-closed, pre-write): a file
+                    // whose *content* contains a registered secret value is
+                    // excluded, never copied — the promise the post-write
+                    // leak check enforces, applied before anything can land
+                    // on disk (docs/CAPTURE.md §3/§4).
+                    if let Some(reason) =
+                        payload_secret_screen(&abs, registry_values, opts.limits.max_file_bytes)
+                    {
+                        file_secret_excluded += 1;
+                        excluded.push(format!("{}: {}", abs.display(), reason));
+                        continue;
+                    }
                     // Bundle-relative payload path: `files/home/<stem>`.
                     let stem = name.trim_start_matches('.');
                     let rel = format!("files/home/{stem}");
@@ -957,11 +969,53 @@ pub fn write_bundle(
     written.sort();
     written.dedup();
 
-    // Post-write leak check: no registered secret value may appear in any
-    // bundle file (fail-closed).
-    leak_check(&canon_out, &result.secret_values)?;
+    // Post-write leak check (defense in depth): the payload screen above
+    // refuses secret-bearing files before they are copied, so a hit here means
+    // an unforeseen path. Fail closed *and* leave nothing behind: remove the
+    // files written by this invocation so a partial bundle cannot retain the
+    // value on disk (content pre-existing from a `--force` overwrite is not
+    // touched).
+    if let Err(e) = leak_check(&canon_out, &result.secret_values) {
+        for rel in &written {
+            let _ = std::fs::remove_file(canon_out.join(rel));
+        }
+        return Err(e);
+    }
 
     Ok(written)
+}
+
+/// Pre-write secret-value screen for a candidate payload: returns `Some(reason)`
+/// when the file's content contains a registered secret value (the same
+/// substring rule as [`leak_check`], values of at least 4 bytes). Such a file
+/// is excluded, never copied. Bounded read: `decide_file` already refused
+/// oversize files; a file that grew since that decision is skipped here and
+/// remains covered by the post-write leak check.
+fn payload_secret_screen(
+    path: &Path,
+    secret_values: &[String],
+    max_bytes: usize,
+) -> Option<String> {
+    if secret_values.is_empty() {
+        return None;
+    }
+    use std::io::Read;
+    let f = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    let n = f.take(max_bytes as u64 + 1).read_to_end(&mut buf).ok()?;
+    if n > max_bytes {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    for v in secret_values {
+        if v.len() < 4 {
+            continue;
+        }
+        if text.contains(v.as_str()) {
+            return Some("contains a secret value (excluded, never copied)".into());
+        }
+    }
+    None
 }
 
 /// Scan every bundle file for registered secret values. Fails closed on any

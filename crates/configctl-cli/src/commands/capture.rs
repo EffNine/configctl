@@ -300,16 +300,20 @@ pub fn run_capture_with_governor(
         },
         Err(e) => {
             let e = registry.redact(&e);
+            // A leak abort (defense in depth) is not an overwrite problem:
+            // say what actually happened and what to do about it.
+            let hint = if e.contains("secret leak") {
+                "capture was aborted and the files it had written were removed; \
+                 remove the secret value from the source file and re-run capture"
+            } else {
+                "re-run with --force to overwrite, or choose an empty --output directory"
+            };
             CaptureOutput {
                 result: Some(cap_result),
                 written: Vec::new(),
                 out_dir,
                 dry_run: false,
-                error_envelope: Some(crate::render::Envelope::error(
-                    "capture",
-                    &e,
-                    "re-run with --force to overwrite, or choose an empty --output directory",
-                )),
+                error_envelope: Some(crate::render::Envelope::error("capture", &e, hint)),
                 exit_code: 2,
                 registry,
             }

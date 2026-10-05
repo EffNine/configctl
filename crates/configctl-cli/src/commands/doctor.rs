@@ -68,24 +68,32 @@ pub fn run_doctor(state_dir_override: Option<&str>, runner: &dyn CommandRunner) 
     } else {
         "unavailable (install libsecret / secret-tool)".into()
     };
-    let (state_ok, plans, interrupted, error) = match configctl_core::state::list_plans(&state_dir)
-    {
-        Err(e) => (false, 0, Vec::new(), Some(e)),
-        Ok(list) => {
-            let mut interrupted = Vec::new();
-            for (id, profile, status, _) in &list {
-                if status == "applying" || status == "partial" {
-                    let ops =
-                        configctl_core::rollback::classify_plan(&state_dir, id).unwrap_or_default();
-                    interrupted.push(InterruptedPlan {
-                        plan_id: id.clone(),
-                        profile: profile.clone(),
-                        status: status.clone(),
-                        ops,
-                    });
+    let (state_ok, plans, interrupted, error) = if !state_dir.exists() {
+        // Fresh machine: the state directory is created lazily by the first
+        // mutating command, so its absence is not a fault. `doctor` stays
+        // read-only (it must not create it); this mirrors `status`'s
+        // "not initialized yet" handling. A state dir that exists but cannot
+        // be read still reports UNUSABLE below.
+        (true, 0, Vec::new(), None)
+    } else {
+        match configctl_core::state::list_plans(&state_dir) {
+            Err(e) => (false, 0, Vec::new(), Some(e)),
+            Ok(list) => {
+                let mut interrupted = Vec::new();
+                for (id, profile, status, _) in &list {
+                    if status == "applying" || status == "partial" {
+                        let ops = configctl_core::rollback::classify_plan(&state_dir, id)
+                            .unwrap_or_default();
+                        interrupted.push(InterruptedPlan {
+                            plan_id: id.clone(),
+                            profile: profile.clone(),
+                            status: status.clone(),
+                            ops,
+                        });
+                    }
                 }
+                (true, list.len(), interrupted, None)
             }
-            (true, list.len(), interrupted, None)
         }
     };
     DoctorOutput {

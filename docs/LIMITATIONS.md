@@ -35,3 +35,21 @@
 17. Informational v2 sections are not diffed yet: `plan` does not warn about
     recorded resources it cannot reproduce. Reporting them explicitly as
     `UNSUPPORTED`/`MANUAL` is a v1.1 close-out item.
+
+## v1.3.1 additions (field-validation findings)
+
+18. **Env consolidation vs captured file payloads (F2).** If a home dotfile
+    (e.g. `~/.bashrc`) was captured as a file payload and later modified by
+    `env consolidate` (include block) or move-mode tombstoning, `verify`
+    reports that file as `DRIFT` against the captured copy — the modification
+    is configctl's own, but the payload is a point-in-time snapshot. Workaround:
+    re-run `capture` after consolidating, or consolidate before capturing.
+    A proper fix (plan-aware payload expectations) needs a design review.
+19. **Foreign-manager probes are observational (O1).** `scan`/`capture` probe
+    every package-manager binary present on `PATH` (v1.1 "discover broadly"
+    policy), and the legacy apt observe path uses `dpkg-query` whenever it is
+    installed — even off Debian-family hosts. Nothing installs or removes via a
+    foreign manager: execution paths are distro-gated per provider (`apt` on
+    Debian-family, `dnf` on Fedora/RHEL-like, `pacman` on Arch-like, `apk` on
+    Alpine), and elevation is `sudo -n` only. In stock distros the foreign
+    binaries are absent, so nothing runs.

@@ -308,8 +308,23 @@ pub fn apply_plan(
                 });
             }
             Err(e) => {
-                let _ =
-                    crate::state::set_plan_status(state_dir, plan_id, crate::state::STATUS_PARTIAL);
+                // Refusal before any op touched its target (e.g. the stale /
+                // TOCTOU precheck, an ownership refusal, or a symlink
+                // refusal): the machine is exactly as before, so the plan
+                // returns to `approved` — a phantom `partial` would send the
+                // user into the recovery flow for nothing. Any executed op or
+                // write-phase journal entry keeps `partial`.
+                let mutated = !report.executed.is_empty()
+                    || !crate::rollback::journal_shows_no_target_mutation(state_dir, plan_id);
+                let _ = crate::state::set_plan_status(
+                    state_dir,
+                    plan_id,
+                    if mutated {
+                        crate::state::STATUS_PARTIAL
+                    } else {
+                        crate::state::STATUS_APPROVED
+                    },
+                );
                 return Err(e);
             }
         }

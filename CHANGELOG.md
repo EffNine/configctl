@@ -4,6 +4,37 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
+## [1.3.1] — 2026-10-05
+
+Field-validation fixes: found by end-to-end validation of the shipped v1.3.0
+artifacts on Ubuntu, Alpine, Fedora, and Arch (real containers, real package
+managers).
+
+### Fixed
+
+- **`capture` no longer copies a secret-bearing home dotfile into the
+  bundle.** A payload whose *content* contains a registered secret value is
+  excluded before anything is written
+  (`contains a secret value (excluded, never copied)`), matching
+  `docs/CAPTURE.md`'s promise; previously the file was copied and only a
+  post-write check aborted, leaving a partial bundle containing the value.
+  `--dry-run` no longer lists such a file as a write. The post-write leak
+  check remains as defense in depth and now also removes the files it had
+  written when it trips, so an abort never leaves a partial bundle behind.
+- **`doctor` on a fresh machine reports `State OK`, exit 0.** A missing state
+  directory is "not initialized yet", not `UNUSABLE`; a state directory that
+  exists but cannot be read still reports `UNUSABLE` (exit 1). `doctor`
+  remains read-only — it never creates the state directory.
+- **A refused `apply` no longer leaves a phantom `partial` plan.** A refusal
+  before any op touched its target (stale/TOCTOU precheck, ownership or
+  symlink refusal) returns the plan to `approved`; `doctor` no longer reports
+  an interrupted apply, and the circular "recover with rollback" / "see
+  doctor" guidance is gone. Failures after a write still mark `partial`.
+- Docs: the `scan` and `verify` JSON/human examples in `CLI_SPEC.md` now
+  match the shipped output; `LIMITATIONS.md` §18–19 documents two
+  field-validation findings with workarounds (env-consolidation vs captured
+  file payloads; observational foreign-manager probes).
+
 ## [1.3.0] — 2026-10-05
 
 Environment UX polish, robustness hardening, and native package providers

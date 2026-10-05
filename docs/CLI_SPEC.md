@@ -136,7 +136,9 @@ Potential issues:
 Scan complete in 1.8s — no changes made.
 ```
 
-JSON (`--json`) shape:
+JSON (`--json`) shape (v1.1+): `data` carries the typed sections plus a
+`statistics` rollup (v1.0's `counts`/`issues`/`findings` example is
+superseded — issue-style summaries moved to `audit`):
 
 ```json
 {
@@ -145,17 +147,20 @@ JSON (`--json`) shape:
   "status": "ok",
   "data": {
     "roots": ["/home/user/projects"],
-    "counts": {
-      "projects": 23, "config_files": 184, "environment_files": 31,
-      "variables": 247, "potential_secrets": 48, "system_services": 12
+    "projects": [ ... ], "config_files": [ ... ], "env_files": [ ... ],
+    "dotfiles": [ ... ], "git_findings": [ ... ],
+    "environment": { "total": 247, "secrets": 48, "by_class": { ... }, "vars": [ ... ] },
+    "filesystem": { "counters": { ... }, "symlinks": [ ... ] },
+    "package_inventory": { "managers": { ... }, "packages": [ ... ] },
+    "services": { ... }, "hardware": { ... }, "mounts": [ ... ],
+    "toolchain": { ... }, "completeness": { "status": "COMPLETE", "reasons": [] },
+    "governor": { "elapsed_secs": 1.8, "files": 41230, "limit_hit": null },
+    "statistics": {
+      "files_visited": 41230, "projects_found": 23, "config_files_found": 184,
+      "env_files_found": 31, "env_vars_found": 247, "likely_secret_variables": 48,
+      "excluded_paths": 12
     },
-    "issues": [
-      { "code": "secret_duplicated", "severity": "warning", "count": 7, "message": "7 secrets duplicated" }
-    ],
-    "findings": [
-      { "kind": "environment_file", "path": "projects/foo/.env", "project": "foo",
-        "risk": "secret-containing", "confidence": "likely" }
-    ]
+    "timestamp": "2026-10-05T02:01:59Z"
   },
   "warnings": [], "errors": []
 }
@@ -328,20 +333,22 @@ Human output:
 ```
 Environment Verification — work
 
-Packages       47/47    PASS
-Dotfiles      128/128   PASS
-Environment     9/9     PASS
-Secrets         7/9     DEGRADED
-Services        6/6     PASS
+env          3/3    PASS
+file         3/3    PASS
+git          2/2    PASS
+package      29/29    PASS
+secret       0/3    FAIL
+service      0/50    FAIL
 
-Drift detected:
-
-  ~ ~/.gitconfig
-  ~ ~/.config/nvim/init.lua
-  - ripgrep package
-  ! secret://work/dev/github/GITHUB_TOKEN  MISSING
-  ? docker.service                          UNKNOWN (systemd not running)
+Findings:
+  Unknown secret secret://work/alpha/API_KEY — backend unavailable
+  Unsupported service ModemManager.service — system scope (privileged; recorded only)
+  Drift file ~/.gitconfig — content differs
 ```
+
+Categories are lowercase provider names (`env`, `envfile`, `file`, `git`,
+`package`, `secret`, `service`); a category with any non-`MATCH` result shows
+`FAIL`, and the findings list names each one with its reason.
 
 JSON: one record per resource with `status` in
 `match|drift|missing|unmanaged|unknown|error`.

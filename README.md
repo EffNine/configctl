@@ -6,7 +6,7 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.3.0 released (environment consolidation, robustness hardening, and native package providers: apt, dnf, pacman, apk).**
+**Status: v1.3.1 released (environment consolidation, robustness hardening, and native package providers: apt, dnf, pacman, apk).**
 The full lifecycle is implemented:
 
 ```console

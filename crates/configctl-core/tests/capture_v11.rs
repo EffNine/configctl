@@ -98,6 +98,115 @@ fn capture_opts() -> configctl_core::capture::CaptureOptions {
     }
 }
 
+// --- F1 (v1.3.1): secret-bearing payload files are excluded, never copied ---
+
+#[test]
+fn payload_with_registered_secret_value_is_excluded_before_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let canary = "sk-live-CANARY-9f3a2b7c1d4e";
+    std::fs::write(
+        home.join(".bashrc"),
+        format!("export GITHUB_TOKEN={canary}\nexport EDITOR=vim\n"),
+    )
+    .unwrap();
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Test\n").unwrap();
+
+    let fake = FakeCommandRunner::new();
+    let view = v11_view();
+    let mut opts = capture_opts();
+    opts.home = Some(home.clone());
+    let result = configctl_core::capture::run_capture(&opts, &view, &fake, &[canary.to_string()])
+        .expect("capture succeeds; the secret-bearing file is excluded");
+
+    // The secret-bearing file is excluded with a named reason, never a payload.
+    assert!(
+        !result
+            .payloads
+            .iter()
+            .any(|p| p.bundle_rel.contains("bashrc")),
+        "secret-bearing payload must not be staged: {:?}",
+        result
+            .payloads
+            .iter()
+            .map(|p| &p.bundle_rel)
+            .collect::<Vec<_>>()
+    );
+    assert!(result
+        .payloads
+        .iter()
+        .any(|p| p.bundle_rel.contains("gitconfig")));
+    assert!(
+        result.summary.excluded.iter().any(|e| {
+            e.contains(".bashrc") && e.contains("contains a secret value (excluded, never copied)")
+        }),
+        "excluded list must name the file and the reason: {:?}",
+        result.summary.excluded
+    );
+
+    // Writing the bundle succeeds and no byte of the canary lands anywhere.
+    let out = tmp.path().join("work");
+    let written = configctl_core::capture::write_bundle(&result, &out, false).expect("bundle");
+    assert!(!written.iter().any(|w| w.contains("bashrc")));
+    assert!(out.join("files/home/gitconfig").exists());
+    assert!(!out.join("files/home/bashrc").exists());
+    for rel in &written {
+        let bytes = std::fs::read(out.join(rel)).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "canary leaked into {rel}"
+        );
+    }
+}
+
+#[test]
+fn write_bundle_removes_its_files_on_leak_abort() {
+    // Defense in depth: even when a secret value reaches the bundle through
+    // an unforeseen path, the abort must leave no partial bundle behind.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let canary = "sk-live-CANARY-defense-in-depth";
+    std::fs::write(home.join(".bashrc"), format!("export TOKEN={canary}\n")).unwrap();
+
+    let fake = FakeCommandRunner::new();
+    let view = v11_view();
+    let mut opts = capture_opts();
+    opts.home = Some(home.clone());
+    // Capture with an empty registry: the payload passes the pre-write screen
+    // (nothing registered), simulating an unforeseen path.
+    let mut result =
+        configctl_core::capture::run_capture(&opts, &view, &fake, &[]).expect("capture");
+    assert!(result
+        .payloads
+        .iter()
+        .any(|p| p.bundle_rel.contains("bashrc")));
+
+    // Register the value afterwards: the post-write leak check must fail
+    // closed AND remove every file this invocation wrote.
+    result.secret_values = vec![canary.to_string()];
+    let out = tmp.path().join("work");
+    let err = configctl_core::capture::write_bundle(&result, &out, false).unwrap_err();
+    assert!(err.contains("secret leak"), "got: {err}");
+    let mut files = Vec::new();
+    collect_files(&out, &mut files);
+    assert!(files.is_empty(), "files left behind: {files:?}");
+}
+
+fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_files(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+}
+
 #[test]
 fn v11_capture_emits_services_env_lock() {
     let fake = FakeCommandRunner::new();

@@ -166,6 +166,24 @@ pub fn journal_shows_no_mutation(state_dir: &Path, plan_id: &str) -> bool {
     })
 }
 
+/// True when no op reached a write-capable phase (`BACKUP` or later) for this
+/// plan. Unlike [`journal_shows_no_mutation`], a lone `FAILED` entry does not
+/// count: a refusal *before* any backup or write (e.g. the stale/TOCTOU
+/// precheck, an ownership or symlink refusal) leaves the machine untouched, so
+/// the plan can return to `approved` instead of a phantom `partial` that would
+/// send the user into the recovery flow for nothing.
+pub fn journal_shows_no_target_mutation(state_dir: &Path, plan_id: &str) -> bool {
+    let Ok(journal) = crate::state::journal_for_plan(state_dir, plan_id) else {
+        return false;
+    };
+    !journal.iter().any(|e| {
+        matches!(
+            e.phase.as_str(),
+            "BACKUP" | "EXECUTE" | "POSTCHECK" | "DONE"
+        )
+    })
+}
+
 /// Options for rollback.
 #[derive(Debug, Clone, Default)]
 pub struct RollbackOptions {
