@@ -4,6 +4,21 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
+## [Unreleased]
+
+### Changed
+
+- **TUI: content is grouped into titled, bordered sections** (readability
+  pass). Each tab is now a stack of panels — Overview: *State* / *Drift*;
+  Verify: *Categories* / *Findings*; Environment: *Settings* (grouped per
+  startup file, with plain-language "when is this read" headers) /
+  *Effective values* / *Consolidation*; Doctor: *Platform* / *Backends* /
+  *State*; Help: *Keys* / *CLI commands* / *Safety*. Statuses are colored
+  (PASS green, FAIL red, warnings yellow), section titles accented, hints
+  dim, and the active tab is highlighted. Fixed sections are bounded so
+  small terminals stay usable; the scrollable list keeps `j`/`k` selection.
+  No behavior change: still read-only, same keys, same data.
+
 ## [1.4.0] — 2026-10-05
 
 ### Added

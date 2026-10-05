@@ -206,7 +206,7 @@ fn verify_tab_renders_categories_findings_and_pass_fail() {
         "file",
         "1/2",
         "FAIL",
-        "Findings:",
+        "Findings",
         "Missing",
         "~/.gitconfig",
         "target does not exist",
@@ -385,4 +385,56 @@ fn failed_tab_renders_a_readable_error_not_a_panic() {
     // The footer still names the command and the keys still work.
     assert!(text.contains("configctl verify PROFILE"), "{text}");
     assert!(text.contains("q quit"), "{text}");
+}
+
+/// v1.4.1: content is grouped into titled, bordered sections (visual
+/// hierarchy), not a flat wall of text.
+#[test]
+fn tabs_are_grouped_into_titled_bordered_sections() {
+    // Overview: State + Drift sections.
+    let mut app = app_with(Tab::Overview);
+    app.set_overview(overview_fixture());
+    let text = render(&app, 100, 30);
+    for needle in ["┌", "┐", "└", "┘", "│", " State ", " Drift "] {
+        assert!(text.contains(needle), "overview missing {needle:?}\n{text}");
+    }
+
+    // Environment: Settings grouped per file, plus fixed sections.
+    let mut app = app_with(Tab::Environment);
+    app.set_environment(env_fixture());
+    let text = render(&app, 100, 30);
+    for needle in [
+        " Settings ",
+        " Effective values ",
+        " Consolidation ",
+        "(read by every Bash terminal)", // per-file group header
+    ] {
+        assert!(
+            text.contains(needle),
+            "environment missing {needle:?}\n{text}"
+        );
+    }
+
+    // Doctor: Platform / Backends / State sections.
+    let mut app = app_with(Tab::Doctor);
+    app.set_doctor(doctor_fixture());
+    let text = render(&app, 100, 30);
+    for needle in [" Platform ", " Backends ", " State "] {
+        assert!(text.contains(needle), "doctor missing {needle:?}\n{text}");
+    }
+
+    // Verify: Categories + Findings sections.
+    let mut app = app_with(Tab::Verify);
+    app.set_verify(verify_fixture());
+    let text = render(&app, 100, 30);
+    for needle in [" Categories ", " Findings "] {
+        assert!(text.contains(needle), "verify missing {needle:?}\n{text}");
+    }
+
+    // Help: Keys / CLI / Safety sections.
+    let app = app_with(Tab::Help);
+    let text = render(&app, 100, 30);
+    for needle in [" Keys ", " Equivalent CLI commands ", " Safety "] {
+        assert!(text.contains(needle), "help missing {needle:?}\n{text}");
+    }
 }

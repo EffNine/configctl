@@ -59,7 +59,9 @@ was.
 
 ## 3. Screens (T1)
 
-Data is loaded lazily per tab with the same library functions the CLI uses
+Each screen is a stack of titled, bordered sections (grouping + hierarchy:
+accented titles, colored statuses, dim hints). Data is loaded lazily per tab
+with the same library functions the CLI uses
 (`status`, `verify`, `env explain`, `doctor`); `r` re-loads the current tab.
 Nothing is cached to disk.
 
