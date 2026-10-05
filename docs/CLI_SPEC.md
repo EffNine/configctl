@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission); v1.3 adds native `dnf`/`pacman`/`apk` package plans plus polish: `--backup-dir` for move emission, `--home` on `apply`/`verify`/`rollback`/`undo`, and deterministic tombstones with idempotent re-emit.** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission); v1.3 adds native `dnf`/`pacman`/`apk` package plans plus polish: `--backup-dir` for move emission, `--home` on `apply`/`verify`/`rollback`/`undo`, and deterministic tombstones with idempotent re-emit; v1.4 adds `tui`, a read-only interactive dashboard (T1, docs/TUI.md).** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -676,6 +676,27 @@ lock, journal, and fail-closed guards as `rollback`; refuses (exit 2/5) when
 the latest plan was never applied or was already rolled back. `--home <DIR>`
 overrides `$HOME` exactly as in `rollback`.
 
+### 2.18 `configctl tui`
+
+```
+configctl tui [PROFILE] [--home <DIR>]
+```
+
+Read-only interactive dashboard (v1.4 T1; `--state-dir` is the global
+option): five tabs — Overview, Verify, Environment, Doctor, Help — loaded
+lazily with the same read-only engines as `status`/`verify`/`env explain`/
+`doctor`. Keys: `1`–`5` or `Tab`/`Shift+Tab` switch tabs; `j`/`k` or
+`↓`/`↑` move the list selection; `r` reloads the current tab; `?` opens
+Help; `q`, `Esc`, or `Ctrl+C` quits and restores the terminal. Every tab
+shows its equivalent CLI command (the TUI teaches the CLI). Nothing is
+mutated, cached to disk, or sent over the network; secret declarations are
+rendered without values. Tabs that need a profile show
+`pass a profile: configctl tui <PROFILE>` when none was given. Exit codes:
+0 normal quit; 2 usage or when stdin/stdout is not a terminal (refused up
+front with a one-line error, so pipes never receive escape sequences).
+No `--json`: the TUI is a human view; scripts keep using the CLI
+subcommands.
+
 ---
 
 ## 3. Output rules
@@ -730,6 +751,7 @@ Apply 6 operations to this machine? [y/N]
 | native `dnf`/`pacman`/`apk` package plans (distro-gated probes, `sudo -n`, report-only rollback) | v1.3 |
 | `onboard` | v1.2 E4 |
 | `undo` (alias for `rollback --last`) | v1.2 E4 |
+| `tui` (T1 read-only dashboard) | v1.4 |
 
 `profile migrate` supports `--to 1` only (v1 is the sole schema; already-
 current profiles report no-op). `secrets set` reads via hidden prompt or

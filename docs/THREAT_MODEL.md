@@ -281,6 +281,23 @@ The `apk` parser and argv were additionally verified against real
 
 ---
 
+## 7c. TUI delta (no new T-ID)
+
+Phase T1 of the interactive dashboard (`configctl tui`, docs/TUI.md) adds no
+new threat class, so no new T-ID is opened. It is strictly read-only: the
+TUI calls only `status` state queries, `verify`, `env explain`, and `doctor`
+— never `plan`/`apply`/`rollback`/`capture` — and renders the same
+value-redacted data as the CLI (secret declarations never carry values, and
+the render layer redacts them again), so the display/redaction dispositions
+(T1/T10) are unchanged. The terminal is entered through `ratatui::run`,
+which restores the alternate screen and raw mode on normal exit *and* on
+panic; a non-TTY stdin/stdout is refused up front (exit 2, one line) instead
+of writing escape sequences into pipes. No new privilege, no network, no
+persistence. Mutating TUI flows (T2+) require their own threat review before
+implementation, exactly like move mode's promotion rule.
+
+---
+
 ## 8. Security non-goals and honest limitations
 
 - **No guarantee against a compromised host.** If the OS, keyring daemon, or

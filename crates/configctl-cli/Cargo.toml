@@ -14,6 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 dirs = { workspace = true }
 rpassword = { workspace = true }
+ratatui = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -79,7 +79,7 @@ commitment), **Rejected** (will not be built as described).
 
 | Feature | State | Rationale |
 |---|---|---|
-| GUI / TUI / web dashboard | Rejected for v1.0 | CLI only |
+| GUI / TUI / web dashboard | TUI T1 (read-only) authorized for v1.4; GUI/web rejected | Ground rule 3 satisfied for T1: agreed milestone (v1.4, docs/TUI.md), threat-model delta (docs/TUI.md §5, no new T-ID), test plan (docs/TUI.md §7), explicit authorization. T2+ mutating TUI flows remain gated by a new threat review |
 | AI / LLM features of any kind | Rejected | Explicit non-goal |
 | Telemetry / analytics | Rejected | Explicit non-goal |
 | User accounts / hosted configctl service | Rejected | Explicit non-goal |

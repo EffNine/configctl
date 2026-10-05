@@ -7,7 +7,7 @@
 use clap::{Parser, Subcommand};
 use configctl_cli::commands::{
     apply, audit, capture, doctor, env, init, onboard, plan, profile, rollback, scan, secrets,
-    status, verify, why,
+    status, tui, verify, why,
 };
 use configctl_core::command::StdCommandRunner;
 use std::process::ExitCode;
@@ -243,6 +243,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only interactive dashboard: status, verify, env, doctor (T1)
+    Tui {
+        /// Profile name or bundle path (optional; adds drift/verify data)
+        #[arg(value_name = "PROFILE")]
+        profile: Option<String>,
+        /// Override $HOME for home-resolved reads (default: $HOME).
+        /// Thread the same --home as `verify`/`env explain`.
+        #[arg(long = "home", value_name = "DIR")]
+        home: Option<String>,
+    },
     /// Create config, profiles, and state directories (touches nothing else)
     Init {
         /// Default profile name for the new config
@@ -477,8 +487,13 @@ fn main() -> ExitCode {
     }
     let meta = command_meta(&cli);
     let explain = cli.explain;
+    let is_tui = matches!(cli.command, Some(Cmd::Tui { .. }));
     let code = run(cli);
-    configctl_cli::guidance::emit(&meta, last_code(), explain);
+    if !is_tui {
+        // The TUI is its own screen: after it exits (or refuses without a
+        // TTY) a guidance block would only add noise to a restored terminal.
+        configctl_cli::guidance::emit(&meta, last_code(), explain);
+    }
     code
 }
 
@@ -522,6 +537,7 @@ fn command_meta(cli: &Cli) -> configctl_cli::guidance::Meta {
         },
         Some(Cmd::Audit { json, .. }) => (Topic::Audit, *json, false),
         Some(Cmd::Doctor { json }) => (Topic::Doctor, *json, false),
+        Some(Cmd::Tui { .. }) => (Topic::Status, false, false),
         Some(Cmd::Init { json, .. }) => (Topic::Start, *json, false),
         Some(Cmd::Status { json, .. }) => (Topic::Status, *json, false),
         Some(Cmd::Why { json, .. }) => (Topic::Why, *json, false),
@@ -1548,6 +1564,17 @@ fn run(cli: Cli) -> ExitCode {
                 finish(1)
             }
         }
+        Some(Cmd::Tui { profile, home }) => {
+            let out = tui::run_tui(
+                profile.as_deref(),
+                cli.state_dir.as_deref(),
+                home.as_deref().map(std::path::Path::new),
+            );
+            if let Some(e) = &out.error {
+                eprintln!("error: {e}");
+            }
+            finish(out.exit_code as u8)
+        }
         Some(Cmd::Init {
             profile,
             force,
@@ -1822,6 +1849,29 @@ mod tests {
     fn parses_read_only_status_command() {
         let cli = Cli::try_parse_from(["configctl", "status"]).expect("status parses");
         assert!(matches!(cli.command, Some(Cmd::Status { .. })));
+    }
+
+    #[test]
+    fn parses_tui_command() {
+        let cli = Cli::try_parse_from(["configctl", "tui", "work", "--home", "/tmp/h"])
+            .expect("tui parses");
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Tui {
+                profile: Some(_),
+                home: Some(_)
+            })
+        ));
+        let cli = Cli::try_parse_from(["configctl", "--state-dir", "/tmp/s", "tui"])
+            .expect("tui parses without a profile");
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Tui {
+                profile: None,
+                home: None
+            })
+        ));
+        assert_eq!(cli.state_dir.as_deref(), Some("/tmp/s"));
     }
 
     #[test]

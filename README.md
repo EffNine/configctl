@@ -6,7 +6,7 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.3.1 released (environment consolidation, robustness hardening, and native package providers: apt, dnf, pacman, apk).**
+**Status: v1.4.0 released (read-only TUI dashboard; environment consolidation; native package providers: apt, dnf, pacman, apk).**
 The full lifecycle is implemented:
 
 ```console
@@ -20,6 +20,7 @@ $ configctl status [profile]         # one-page state + drift summary
 $ configctl why ~/.gitconfig         # ownership, last operation, backup
 $ configctl rollback --plan <plan-id> --yes   # restore from backups
 $ configctl doctor                   # state + interrupted-apply diagnostics
+$ configctl tui                      # read-only dashboard: status, verify, env, doctor
 $ configctl guide [topic]            # plain-language help while you work
 $ configctl env explain              # where env settings live + which wins
 $ configctl env consolidate --dry-run # preview one managed env file

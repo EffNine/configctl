@@ -13,7 +13,9 @@ pub struct StatusOutput {
     pub exit_code: i32,
 }
 
-fn age(now: i64, then: i64) -> String {
+/// Human age string shared with the TUI overview, so both views phrase
+/// ages identically.
+pub(crate) fn age(now: i64, then: i64) -> String {
     let d = now.saturating_sub(then);
     if d < 60 {
         "just now".into()

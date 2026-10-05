@@ -14,6 +14,7 @@ pub mod rollback;
 pub mod scan;
 pub mod secrets;
 pub mod status;
+pub mod tui;
 pub mod verify;
 pub mod why;
 

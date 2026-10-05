@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod guidance;
 pub mod render;
+pub mod tui;
 pub use render::Envelope;
 
 #[cfg(test)]

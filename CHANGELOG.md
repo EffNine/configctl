@@ -4,6 +4,20 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
+## [1.4.0] — 2026-10-05
+
+### Added
+
+- **`configctl tui` — read-only interactive dashboard (T1, docs/TUI.md).**
+  Five tabs (Overview / Verify / Environment / Doctor / Help) reuse the
+  existing read-only engines (`status`, `verify`, `env explain`, `doctor`);
+  keys `1`–`5`/`Tab` switch tabs, `j`/`k` move the selection, `r` reloads the
+  current tab, `?` opens Help, and `q`/`Esc`/`Ctrl+C` quits with the terminal
+  restored. Every tab names its equivalent CLI command; secret declarations
+  render without values. Nothing is mutated, cached, or sent over the
+  network, there is no `--json`, and a non-TTY stdin/stdout is refused up
+  front with exit 2. Mutating TUI flows (T2+) remain gated by threat review.
+
 ## [1.3.1] — 2026-10-05
 
 Field-validation fixes: found by end-to-end validation of the shipped v1.3.0
