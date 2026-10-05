@@ -1,6 +1,6 @@
 # WORKSPACE_STRUCTURE.md — Repository layout
 
-Status: **Implemented (v1.0.0-rc.1); 1.1.0 released; 1.2.0 released.** The workspace has three crates (core, discovery, cli); provider logic lives in core modules.
+Status: **Implemented (v1.0.0-rc.1); 1.1.0, 1.2.0, and 1.3.0 released.** The workspace has three crates (core, discovery, cli); provider logic lives in core modules.
 
 Language: Rust (edition 2021). Toolchain: stable; MSRV pinned in
 `rust-toolchain.toml` and CI (exact value decided at P1).
@@ -19,7 +19,7 @@ traits), keeping the provider→core direction without premature micro-crates.
 
 ```
 configctl/
-├── Cargo.toml                      # virtual workspace (version 1.2.0)
+├── Cargo.toml                      # virtual workspace (version 1.3.0)
 ├── Cargo.lock                      # committed
 ├── rust-toolchain.toml             # pinned stable toolchain (1.97)
 ├── README.md
@@ -113,7 +113,7 @@ Matrix: Linux x86_64. MSRV 1.97 (pinned toolchain in `rust-toolchain.toml`).
 ## 6. Versioning
 
 - Workspace crates share one version; the binary reports it via
-  `configctl --version` (`configctl 1.2.0`).
+  `configctl --version` (`configctl 1.3.0`).
 - `schema_version` values (profile/config/JSON output) are independent of the
   crate version and only bump on breaking format changes, with documented
   migration.

@@ -4,10 +4,11 @@ All notable changes to configctl are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are
 semantic. Dates are ISO-8601.
 
-## [Unreleased]
+## [1.3.0] — 2026-10-05
 
-v1.3 UX polish batch (still E5 for move mode — no automatic apply path, no
-plan/state format changes, all defaults backward compatible).
+Environment UX polish, robustness hardening, and native package providers
+(`dnf`, `pacman`, `apk`). Still E5 for move mode — no automatic apply path, no
+plan/state format changes, all defaults backward compatible.
 
 ### Added
 
@@ -43,6 +44,11 @@ plan/state format changes, all defaults backward compatible).
   keeps plan paths consistent — a plan built against `$T/home` and applied
   against another home is refused as stale (exit 5). `export HOME=$T/home`
   is the documented equivalent (see `CLI_SPEC.md` §2.9.1 temp-HOME recipe).
+- Release artifacts now include a static `x86_64-unknown-linux-musl` build
+  for Alpine (next to the existing gnu x86_64 and aarch64 tarballs), so
+  Alpine users get the `apk` provider without a Rust toolchain; the recipe
+  was validated end-to-end (static-pie binary built with `musl-gcc`,
+  smoke-tested on both Alpine and glibc hosts).
 
 ### Changed
 

@@ -1,6 +1,6 @@
 # CLI_SPEC.md — configctl command-line interface
 
-Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission); v1.3 polish adds `--backup-dir` for move emission, `--home` on `apply`/`verify`/`rollback`/`undo`, and deterministic tombstones with idempotent re-emit.** This document describes the actual CLI surface.
+Status: **Implemented (v1.0.0-rc.1); v1.1 adds `scan` governor options (`--max-time`, `--max-files`, `--max-bytes`, `--max-memory`, `--workers`, `--follow-mounts`, `--scan-network`) and completeness reporting; v1.2 adds `env explain`, `env consolidate` (journaled plan), and `env consolidate --mode move` (assisted manual patch emission); v1.3 adds native `dnf`/`pacman`/`apk` package plans plus polish: `--backup-dir` for move emission, `--home` on `apply`/`verify`/`rollback`/`undo`, and deterministic tombstones with idempotent re-emit.** This document describes the actual CLI surface.
 
 Binary name: `configctl` (tentative; see ARCHITECTURE.md open questions).
 
@@ -720,6 +720,7 @@ Apply 6 operations to this machine? [y/N]
 | `env consolidate` shadowing report (`shadowed_declaration`) | v1.2 E3 |
 | `env consolidate --mode move --dry-run` / `--emit-patch` (assisted manual, no auto-apply) | v1.2 E5 |
 | `--home` on `apply`/`verify`/`rollback`/`undo`, `--backup-dir` on move `--emit-patch`, deterministic tombstones + idempotent re-emit | v1.3 polish |
+| native `dnf`/`pacman`/`apk` package plans (distro-gated probes, `sudo -n`, report-only rollback) | v1.3 |
 | `onboard` | v1.2 E4 |
 | `undo` (alias for `rollback --last`) | v1.2 E4 |
 

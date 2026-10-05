@@ -6,7 +6,7 @@
 > environment depends on: packages, dotfiles, `.env` schemas, services, Git
 > config, and secrets (by reference only).
 
-**Status: v1.2.0 released (environment consolidation: explain, consolidate, assisted move, onboard, undo).**
+**Status: v1.3.0 released (environment consolidation, robustness hardening, and native package providers: apt, dnf, pacman, apk).**
 The full lifecycle is implemented:
 
 ```console
@@ -77,7 +77,13 @@ v1 bundles keep loading. See [docs/V1_1_HARDCORE.md](docs/V1_1_HARDCORE.md).
 
 ## Install
 
-Requirements: Linux and Rust 1.97 (see `rust-toolchain.toml`).
+Prebuilt Linux binaries are attached to every
+[release](https://github.com/EffNine/configctl/releases): x86_64, aarch64,
+and a static musl build for Alpine (`configctl-<version>-<target>.tar.gz`,
+with `SHA256SUMS-<target>.txt`). Download, unpack, run `configctl` — no
+toolchain needed.
+
+Or from source (requires Rust 1.97, see `rust-toolchain.toml`):
 
 ```console
 $ cargo install --git https://github.com/EffNine/configctl.git --locked

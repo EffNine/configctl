@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-gnu]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +36,10 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - name: Install musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Resolve tag and version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -48,9 +52,13 @@ jobs:
 
       - name: Build release binary
         env:
-          # Only read when compiling for aarch64; harmless (ignored) on x86_64 builds.
+          # Only read when compiling for aarch64; harmless (ignored) on other targets.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          # Only read when compiling for musl (validated end-to-end in a local
+          # container: static-pie binary runs on Alpine and glibc hosts alike).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package tarball and checksums
