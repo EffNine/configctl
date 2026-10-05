@@ -22,7 +22,7 @@
 13. Capture is broader than apply: `packages.other`, `[[toolchains]]`,
     `[[executables]]`, `[[mounts]]`, `[[directories]]`, `[machine]`, and
     `[hardware]` are recorded (schema v2) but not reproduced. `apply` manages
-    apt/dnf/pacman packages, files, non-secret environment literals, `systemd --user`
+    apt/dnf/pacman/apk packages, files, non-secret environment literals, `systemd --user`
     enable/disable, and git `user.name`/`user.email` only.
 14. System-scope services are captured but classified `PRIVILEGED`; `apply`
     refuses them even with `--yes`.
@@ -31,7 +31,7 @@
     `PARTIAL` with the named reason, never a false `COMPLETE`, and resources
     beyond the stop point are simply not discovered.
 16. Multi-manager package and toolchain discovery is observational; only
-    apt/dnf/pacman installation is executable.
+    apt/dnf/pacman/apk installation is executable.
 17. Informational v2 sections are not diffed yet: `plan` does not warn about
     recorded resources it cannot reproduce. Reporting them explicitly as
     `UNSUPPORTED`/`MANUAL` is a v1.1 close-out item.

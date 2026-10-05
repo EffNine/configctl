@@ -133,16 +133,19 @@ pub fn run_capture(
     // Validate profile name early (fail-closed).
     paths::validate_profile_name(&opts.profile_name)?;
 
-    // --- Packages (apt + native dnf/pacman, same allowlist policy) ---
+    // --- Packages (apt + native dnf/pacman/apk, same allowlist policy) ---
     let pkg = packages::capture_packages(runner);
     let apt_names = packages::apt_names(&pkg);
-    // dnf/pacman attempts fail fast off-platform (missing binary) and stay
-    // silent there: on Ubuntu capture output is byte-identical to v1, while
-    // on Fedora/Arch the native set is captured into its own section.
+    // dnf/pacman/apk attempts fail fast off-platform (missing binary) and
+    // stay silent there: on Ubuntu capture output is byte-identical to v1,
+    // while on Fedora/Arch/Alpine the native set is captured into its own
+    // section.
     let dnf_pkg = crate::package_managers::DnfProvider::capture(runner);
     let pacman_pkg = crate::package_managers::PacmanProvider::capture(runner);
+    let apk_pkg = crate::package_managers::ApkProvider::capture(runner);
     let dnf_names = crate::package_managers::selected_names(&dnf_pkg);
     let pacman_names = crate::package_managers::selected_names(&pacman_pkg);
+    let apk_names = crate::package_managers::selected_names(&apk_pkg);
 
     // --- Git ---
     let git: Option<GitConfig> = gitmeta::capture_git(runner);
@@ -621,8 +624,12 @@ pub fn run_capture(
     for p in &pacman_pkg.selected {
         lock_pacman.insert(p.name.clone(), p.version.clone());
     }
+    let mut lock_apk: BTreeMap<String, String> = BTreeMap::new();
+    for p in &apk_pkg.selected {
+        lock_apk.insert(p.name.clone(), p.version.clone());
+    }
     // v1.1: lock versions for every other manager too (names only in the
-    // profile; versions live here). Native managers (apt/dnf/pacman) are
+    // profile; versions live here). Native managers (apt/dnf/pacman/apk) are
     // skipped: their locks come from the allowlist capture above
     // (selected-only, like apt), not from the full inventory.
     let mut lock_other: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
@@ -635,6 +642,7 @@ pub fn run_capture(
             if v.manager == "apt"
                 || v.manager == "dnf"
                 || v.manager == "pacman"
+                || v.manager == "apk"
                 || v.name.is_empty()
                 || v.name.len() > 128
             {
@@ -666,6 +674,7 @@ pub fn run_capture(
             apt: apt_names,
             dnf: dnf_names,
             pacman: pacman_names,
+            apk: apk_names,
             other: packages_other,
         },
         toolchains,
@@ -711,7 +720,11 @@ pub fn run_capture(
     }
     // Native managers report the same policy line when they ran (silent when
     // their binary is absent, so Ubuntu output is unchanged).
-    for (manager, native) in [("dnf", &dnf_pkg), ("pacman", &pacman_pkg)] {
+    for (manager, native) in [
+        ("dnf", &dnf_pkg),
+        ("pacman", &pacman_pkg),
+        ("apk", &apk_pkg),
+    ] {
         if native.unavailable {
             continue;
         }
@@ -748,13 +761,16 @@ pub fn run_capture(
         files: profile.files.len(),
         packages: profile.packages.apt.len()
             + profile.packages.dnf.len()
-            + profile.packages.pacman.len(),
+            + profile.packages.pacman.len()
+            + profile.packages.apk.len(),
         installed_observed: pkg.installed_total
             + dnf_pkg.installed_total
-            + pacman_pkg.installed_total,
+            + pacman_pkg.installed_total
+            + apk_pkg.installed_total,
         excluded_by_policy: pkg.excluded_by_policy
             + dnf_pkg.excluded_by_policy
-            + pacman_pkg.excluded_by_policy,
+            + pacman_pkg.excluded_by_policy
+            + apk_pkg.excluded_by_policy,
         env_schemas: env_schemas.len(),
         secrets: secrets_count,
         redacted: redacted_vars,
@@ -839,6 +855,7 @@ pub fn run_capture(
             apt: lock_apt,
             dnf: lock_dnf,
             pacman: lock_pacman,
+            apk: lock_apk,
             other: lock_other,
         },
         payloads,
@@ -904,7 +921,10 @@ pub fn write_bundle(
     written.push("secrets.manifest.toml".into());
 
     // packages.lock.toml (only when packages were observed)
-    if !result.lock.apt.is_empty() || !result.lock.dnf.is_empty() || !result.lock.pacman.is_empty()
+    if !result.lock.apt.is_empty()
+        || !result.lock.dnf.is_empty()
+        || !result.lock.pacman.is_empty()
+        || !result.lock.apk.is_empty()
     {
         let lock_toml = result.lock.to_toml()?;
         let lock_path = canon_out.join("packages.lock.toml");

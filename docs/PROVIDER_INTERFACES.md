@@ -344,10 +344,11 @@ Rules:
 | apt | `configctl-provider-apt` | PackageInstall/Remove | `sudo -n` only | report-only | fixed argv, no shell, output parsing version-checked |
 | dnf | `configctl-provider-dnf` | PackageInstall/Remove | `sudo -n` only | report-only | Fedora/RHEL: probe is distro (`ID`/`ID_LIKE`) + `dnf` binary; lists via pinned `rpm -qa --queryformat '%{NAME}\t%{EVR}\t%{ARCH}\n'` (epochs preserved); installs via `sudo -n dnf install -y` |
 | pacman | `configctl-provider-pacman` | PackageInstall/Remove | `sudo -n` only | report-only | Arch: probe is distro (`ID`/`ID_LIKE`) + `pacman` binary; lists via `pacman -Q`; installs via `sudo -n pacman -S --noconfirm` |
+| apk | `configctl-provider-apk` | PackageInstall/Remove | `sudo -n` only | report-only | Alpine: probe is distro (`ID`/`ID_LIKE`) + `apk` binary; lists via `apk info -v` (right-to-left `name-version-rN` parse, full revision preserved); installs via `sudo -n apk add` (non-interactive by default) |
 | systemd | `configctl-provider-systemd` | ServiceEnable/Disable/Start/Stop | no | full (state revert) | `systemctl --user` only |
 | env | `configctl-provider-env` | EnvSet/EnvUnset | no | full | writes `environment.d` file; secret refs validated, never written |
 
-Deferred providers: `apk`, `brew`, `nix`, system-scope systemd,
+Deferred providers: `brew`, `nix`, system-scope systemd,
 and non-systemd init (`DEFERRED_FEATURES.md`).
 
 ---
@@ -363,6 +364,7 @@ fn registry(platform: &PlatformInfo) -> ProviderRegistry {
     r.add(Box::new(AptProvider::new()));
     r.add(Box::new(DnfProvider::new()));
     r.add(Box::new(PacmanProvider::new()));
+    r.add(Box::new(ApkProvider::new()));
     r.add(Box::new(SystemdProvider::new()));
     r.add(Box::new(EnvProvider::new()));
     r

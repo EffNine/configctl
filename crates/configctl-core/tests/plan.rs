@@ -235,6 +235,7 @@ fn package_missing_and_mismatch() {
         apt: BTreeMap::from([("ripgrep".into(), "14.1.0".into())]),
         dnf: Default::default(),
         pacman: Default::default(),
+        apk: Default::default(),
         other: Default::default(),
     });
     let mut st = ObservedState::default();
@@ -413,6 +414,7 @@ fn command_runner_is_only_subprocess_path() {
         &runner,
         home.path(),
         &["ripgrep".to_string()],
+        &[],
         &[],
         &[],
         &[],

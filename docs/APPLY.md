@@ -55,8 +55,8 @@ files are never overwritten; `--adopt` backs up and records ownership first.
 
 Native system managers only — `apt` via `sudo -n apt-get install -y <name>`,
 `dnf` via `sudo -n dnf install -y <name>`, `pacman` via
-`sudo -n pacman -S --noconfirm <name>` (fixed argv,
-no shell, no password prompts). Each provider probes its native distro
+`sudo -n pacman -S --noconfirm <name>`, `apk` via `sudo -n apk add <name>`
+(fixed argv, no shell, no password prompts). Each provider probes its native distro
 (`ID`/`ID_LIKE`) plus its binary before planning; anything else is recorded
 `Unavailable`, never silently skipped. Privilege failure fails safely (exit 8)
 without faking success. No downgrades/removals: rollback is report-only.

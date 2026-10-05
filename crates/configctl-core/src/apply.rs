@@ -14,8 +14,8 @@
 //! - Global mutation lock held for the whole run.
 //! - `PackageInstall` uses per-manager fixed argv (`sudo -n apt-get
 //!   install -y <name>`, `sudo -n dnf install -y <name>`,
-//!   `sudo -n pacman -S --noconfirm <name>`); privilege failure fails safely
-//!   (exit 8 class) without faking success.
+//!   `sudo -n pacman -S --noconfirm <name>`, `sudo -n apk add <name>`);
+//!   privilege failure fails safely (exit 8 class) without faking success.
 //! - `systemd --user` only; never system scope.
 //! - Test-only crash simulation via `CONFIGCTL_FAIL_AFTER=<op-id>:<PHASE>`
 //!   (journal the phase, then return without further writes — the persisted
@@ -392,7 +392,7 @@ fn execute_op(
             journal(PH_INTENT, None, Some(&format!("install {}", op.target)))
                 .map_err(ApplyError::Internal)?;
             failpoint(PH_INTENT)?;
-            // Provider dispatch (static registry: apt | dnf | pacman).
+            // Provider dispatch (static registry: apt | dnf | pacman | apk).
             // Anything else fails closed — a hand-edited plan cannot steer
             // fixed argv at an unexpected binary.
             let install_req = match op.provider.as_str() {
@@ -403,6 +403,7 @@ fn execute_op(
                 .output_cap(128 * 1024),
                 "dnf" => crate::package_managers::DnfProvider::install_request(&op.target),
                 "pacman" => crate::package_managers::PacmanProvider::install_request(&op.target),
+                "apk" => crate::package_managers::ApkProvider::install_request(&op.target),
                 other => {
                     journal(PH_FAILED, None, Some("unknown package manager"))
                         .map_err(ApplyError::Internal)?;
@@ -447,6 +448,7 @@ fn execute_op(
             let install_word = match op.provider.as_str() {
                 "dnf" => "dnf install",
                 "pacman" => "pacman install",
+                "apk" => "apk add",
                 _ => "apt install",
             };
             if out.status != Some(0) {
@@ -1568,6 +1570,14 @@ fn is_package_installed(runner: &dyn CommandRunner, provider: &str, name: &str) 
         "pacman" => {
             match runner.run(&crate::package_managers::PacmanProvider::is_installed_request(name)) {
                 Ok(o) => crate::package_managers::PacmanProvider::parse_installed(&o),
+                Err(_) => false,
+            }
+        }
+        "apk" => {
+            match runner.run(&crate::package_managers::ApkProvider::is_installed_request(
+                name,
+            )) {
+                Ok(o) => crate::package_managers::ApkProvider::parse_installed(&o),
                 Err(_) => false,
             }
         }

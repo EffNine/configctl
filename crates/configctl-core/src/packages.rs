@@ -172,7 +172,7 @@ pub fn apt_names(capture: &PackageCapture) -> Vec<String> {
 }
 
 /// Selected names (sorted, unique) for any native-manager capture.
-/// Shared by `[packages].apt` / `.dnf` / `.pacman`.
+/// Shared by `[packages].apt` / `.dnf` / `.pacman` / `.apk`.
 pub fn selected_names(capture: &PackageCapture) -> Vec<String> {
     let mut names: Vec<String> = capture.selected.iter().map(|p| p.name.clone()).collect();
     names.sort();

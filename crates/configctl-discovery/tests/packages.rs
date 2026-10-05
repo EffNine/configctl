@@ -23,7 +23,7 @@ fn governor() -> Arc<ResourceGovernor> {
 #[test]
 fn apt_and_cargo_managers_parse_with_provenance() {
     let runner = FakeCommandRunner::new();
-    // Probe order: apt, dnf, pacman, snap, flatpak, cargo, rustup, npm,
+    // Probe order: apt, dnf, pacman, apk, snap, flatpak, cargo, rustup, npm,
     // pip, pipx, uv, mise, asdf.
     runner.queue(ok(
         "git\t1:2.43.0-1ubuntu1\tamd64\nripgrep\t14.1.0-1\tamd64\n",
@@ -32,6 +32,9 @@ fn apt_and_cargo_managers_parse_with_provenance() {
         "git\t0:2.43.0-1.fc40\tx86_64\nripgrep\t14.1.0-1.fc40\tx86_64\n",
     ));
     runner.queue(ok("ripgrep 14.1.0-1\nbat 0.24.0-1\n"));
+    runner.queue(ok(
+        "git-2.54.0-r0\nmusl-utils-1.2.6-r2\npython3-3.14.8-r0\n",
+    ));
     runner.queue(CommandOutput::default()); // snap missing
     runner.queue(CommandOutput::default()); // flatpak missing
     runner.queue(ok(
@@ -64,6 +67,17 @@ fn apt_and_cargo_managers_parse_with_provenance() {
         .iter()
         .any(|p| p.name == "ripgrep" && p.version.as_deref() == Some("14.1.0-1")));
 
+    let apk: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apk").collect();
+    assert_eq!(apk.len(), 3);
+    assert!(apk
+        .iter()
+        .any(|p| p.name == "musl-utils" && p.version.as_deref() == Some("1.2.6-r2")));
+    assert!(apk
+        .iter()
+        .any(|p| p.name == "python3" && p.version.as_deref() == Some("3.14.8-r0")));
+    assert!(apk.iter().all(|p| p.provenance == "apk"));
+    assert!(apk.iter().all(|p| p.arch.is_none()));
+
     let cargo: Vec<_> = inv
         .packages
         .iter()
@@ -79,6 +93,7 @@ fn apt_and_cargo_managers_parse_with_provenance() {
     assert!(managers.contains(&"apt"));
     assert!(managers.contains(&"dnf"));
     assert!(managers.contains(&"pacman"));
+    assert!(managers.contains(&"apk"));
     assert!(managers.contains(&"mise"));
     assert!(managers.contains(&"asdf"));
     let snap = inv.managers.iter().find(|m| m.manager == "snap").unwrap();
@@ -96,6 +111,9 @@ fn hostile_manager_output_cannot_inject() {
         "good-pkg\t1.0-1.fc40\tx86_64\n$(evil)\t1.0\tnoarch\n../../etc\t1.0\tx86_64\n",
     ));
     runner.queue(ok("good-pkg 1.0-1\n$(evil) 1.0\n"));
+    runner.queue(ok(
+        "good-pkg-1.0-r0\n$(evil)-1.0-r0\n../../etc-1.0-r0\nbad name-1.0-r0\n",
+    ));
     let inv = collect_packages(&governor(), &runner);
     let apt: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apt").collect();
     assert_eq!(apt.len(), 1);
@@ -110,10 +128,13 @@ fn hostile_manager_output_cannot_inject() {
         .collect();
     assert_eq!(pacman.len(), 1);
     assert_eq!(pacman[0].name, "good-pkg");
+    let apk: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apk").collect();
+    assert_eq!(apk.len(), 1);
+    assert_eq!(apk[0].name, "good-pkg");
 }
 
 #[test]
-fn dnf_and_pacman_parse_epochs_and_arch() {
+fn native_managers_parse_epochs_and_apk_revisions() {
     let runner = FakeCommandRunner::new();
     runner.queue(CommandOutput::default()); // apt missing
                                             // rpm EVR keeps epochs verbatim; arch rides along; bad lines skipped.
@@ -123,6 +144,11 @@ fn dnf_and_pacman_parse_epochs_and_arch() {
     // pacman -Q: exactly two fields; epoch preserved; extras skipped.
     runner.queue(ok(
         "ripgrep 14.1.0-1\nlinux 6.8.5.arch1-1\nwine 1:9.0-1\nthree fields here\nlonely\n",
+    ));
+    // apk info -v: right-to-left parse; full `version-rN` preserved; bad
+    // lines skipped.
+    runner.queue(ok(
+        "git-2.54.0-r0\nmusl-utils-1.2.6-r2\nlonely\nno-revision-1.0\n",
     ));
     let inv = collect_packages(&governor(), &runner);
     let dnf: Vec<_> = inv.packages.iter().filter(|p| p.manager == "dnf").collect();
@@ -143,6 +169,12 @@ fn dnf_and_pacman_parse_epochs_and_arch() {
         .any(|p| p.name == "wine" && p.version.as_deref() == Some("1:9.0-1")));
     assert!(pacman.iter().all(|p| p.provenance == "pacman"));
     assert!(pacman.iter().all(|p| p.arch.is_none()));
+    let apk: Vec<_> = inv.packages.iter().filter(|p| p.manager == "apk").collect();
+    assert_eq!(apk.len(), 2);
+    let musl_utils = apk.iter().find(|p| p.name == "musl-utils").unwrap();
+    assert_eq!(musl_utils.version.as_deref(), Some("1.2.6-r2"));
+    assert_eq!(musl_utils.arch, None);
+    assert_eq!(musl_utils.provenance, "apk");
 }
 
 #[test]
@@ -151,6 +183,7 @@ fn unknown_provenance_is_explicit() {
     runner.queue(CommandOutput::default()); // apt missing
     runner.queue(CommandOutput::default()); // dnf missing
     runner.queue(CommandOutput::default()); // pacman missing
+    runner.queue(CommandOutput::default()); // apk missing
     runner.queue(ok(
         "Name  Version  Rev  Tracking  Publisher  Notes\ncode 1.2.3 100 stable vscode classic\n",
     ));

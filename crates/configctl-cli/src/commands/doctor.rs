@@ -51,6 +51,8 @@ pub fn run_doctor(state_dir_override: Option<&str>, runner: &dyn CommandRunner) 
         "dnf (dnf available)".into()
     } else if probe(runner, "pacman", &["--version"]) {
         "pacman (pacman available)".into()
+    } else if probe(runner, "apk", &["--version"]) {
+        "apk (apk available)".into()
     } else {
         "unavailable".into()
     };

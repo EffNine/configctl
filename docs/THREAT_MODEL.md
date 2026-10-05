@@ -15,8 +15,8 @@ In scope:
 - the `configctl` binary and all crates in this workspace
 - the profile bundle format and its files
 - the state directory (ownership DB, backups, plans, journal, audit log)
-- interactions with: user files under `$HOME`, `apt-get` / `dnf` / `pacman`
-  (system package managers), `systemctl --user`,
+- interactions with: user files under `$HOME`, `apt-get` / `dnf` / `pacman` /
+  `apk` (system package managers), `systemctl --user`,
   the Git CLI, the Linux Secret Service over D-Bus
 - discovery of *untrusted* content (arbitrary repos under scan roots may be
   attacker-controlled)
@@ -155,7 +155,7 @@ or printing anything outside its declared scope.
 | Tampering | Concurrent writer changes target between precheck and write | Precheck immediately before write; atomic temp+rename; journal + expected hash; conflict abort |
 | Tampering | Another configctl instance applies concurrently | `flock` single-instance lock for apply/rollback |
 | Repudiation | Change made without a trace | Journal INTENT before, DONE/FAILED after; audit log; history table |
-| Information disclosure | Secrets in argv of `sudo apt-get` / `sudo dnf` / `sudo pacman` | Package-manager argv contains package names only; env is scrubbed; `sudo -n` avoids password prompts on stdin |
+| Information disclosure | Secrets in argv of `sudo apt-get` / `sudo dnf` / `sudo pacman` / `sudo apk` | Package-manager argv contains package names only; env is scrubbed; `sudo -n` avoids password prompts on stdin |
 | Denial of service | Partial apply leaves inconsistent state | Journaled recovery; explicit rollback; `doctor` surfaces partial states |
 | Elevation of privilege | Malicious package/unit names injected into argv | Strict name grammars; argv arrays; never a shell |
 
@@ -210,7 +210,7 @@ or printing anything outside its declared scope.
 | T13 | Secret in state backups | State dir `0700`; backups `0600`; secret-bearing files excluded from default managed set; documented | Medium — local attacker with same UID | Permission tests; docs |
 | T14 | Malicious `.env` triggers code execution | Pure bounded parser; no expansion/interpolation; fuzzed | Low | Fuzz target; parser unit tests |
 | T15 | Oversized/deep inputs cause DoS | Size/depth/finding caps; deny-list; timeouts on subprocesses | Low | Performance tests with adversarial fixtures |
-| T16 | apt/dnf/pacman/systemctl argv injection | Strict name grammars; argv arrays; no shell | Low | Unit tests on command construction |
+| T16 | apt/dnf/pacman/apk/systemctl argv injection | Strict name grammars; argv arrays; no shell | Low | Unit tests on command construction |
 | T17 | Rogue profile enables unwanted service/package | Plan visible; approval required; only profile-declared resources; user services only | Medium — user approves | Integration tests; docs |
 | T18 | Audit misreports safety (false negative on tracked `.env`) | Conservative checks; report uncertainty; `git` required | Medium — heuristic | Audit fixture tests |
 | T19 | Supply-chain compromise of dependencies | Minimal dependency set; `cargo-deny` advisories/licenses; review before adding | Medium | CI |
@@ -245,33 +245,39 @@ or printing anything outside its declared scope.
 
 ---
 
-## 7b. `dnf`/`pacman` delta (no new T-ID)
+## 7b. `dnf`/`pacman`/`apk` delta (no new T-ID)
 
-Shipping the Fedora/RHEL (`dnf`) and Arch (`pacman`) providers adds no new
-threat class, so no new T-ID is opened; coverage stays under the existing
-package-manager IDs:
+Shipping the Fedora/RHEL (`dnf`), Arch (`pacman`), and Alpine (`apk`)
+providers adds no new threat class, so no new T-ID is opened; coverage stays
+under the existing package-manager IDs:
 
 - **No new elevation path (T16/T17).** Installs elevate only via `sudo -n`
-  with fixed argv (`dnf install -y`, `pacman -S --noconfirm`), the same
-  discipline as `apt-get install -y`. Unknown providers in a hand-edited
-  plan fail closed (`ProviderUnavailable`, exit 7) instead of running.
+  with fixed argv (`dnf install -y`, `pacman -S --noconfirm`, `apk add` —
+  plain `apk add` is non-interactive by default, verified on apk-tools
+  2.14.4 and 3.0.6), the same discipline as `apt-get install -y`. Unknown
+  providers in a hand-edited plan fail closed (`ProviderUnavailable`,
+  exit 7) instead of running.
 - **New subprocess argv, same shape (T16).** `rpm -qa --queryformat
   '%{NAME}\t%{EVR}\t%{ARCH}\n'` (pinned format string), `rpm -q <name>`,
-  `pacman -Q[. <name>]`, plus `dnf --version` / `pacman --version` binary
-  probes. All fixed argv through `CommandRunner` (bounded output, timeout,
-  scrubbed env, never a shell); package names are grammar-validated and
-  hostile manager output lines are skipped, with argv-construction tests.
+  `pacman -Q[. <name>]`, `apk info -v` / `apk info -e <name>`, plus
+  `dnf --version` / `pacman --version` / `apk --version` binary probes. All
+  fixed argv through `CommandRunner` (bounded output, timeout, scrubbed
+  env, never a shell); package names are grammar-validated and hostile
+  manager output lines are skipped, with argv-construction tests.
 - **No new secret surface (T1/T10).** Argv carries package names only; distro
   detection reads `/etc/os-release` (world-readable machine facts, no
   secrets); nothing new enters plans, state, logs, or error text.
 - **Rollback stays report-only (T20).** Packages are non-transactional on
-  every manager; rollback prints `dnf remove` / `pacman -R` manual hints and
-  never auto-removes — the same accepted residual as apt.
+  every manager; rollback prints `dnf remove` / `pacman -R` / `apk del`
+  manual hints and never auto-removes — the same accepted residual as apt.
 
 Verified by: `configctl-core/tests/native_packages.rs` (probe matrix,
-golden-output parsing incl. epochs, elevation argv exactness, unavailable
-paths, live negative probe) and the extended
-`configctl-discovery/tests/packages.rs` inventory tests.
+golden-output parsing incl. rpm epochs and real-container `apk info -v`
+captures, elevation argv exactness, unavailable paths, live negative probe)
+and the extended `configctl-discovery/tests/packages.rs` inventory tests.
+The `apk` parser and argv were additionally verified against real
+`alpine:3.19` (apk-tools 2.14.4) and `alpine:latest` (3.24.1, apk-tools
+3.0.6) containers.
 
 ---
 
@@ -284,7 +290,7 @@ paths, live negative probe) and the extended
 - **Heuristic secret detection can always miss things.** Findings are labeled
   with confidence; a clean scan is not proof of secret safety.
 - **`sudo` for system packages is a real privilege boundary.** Only
-  apt/dnf/pacman install operations may elevate, only via `sudo -n`, and
+  apt/dnf/pacman/apk install operations may elevate, only via `sudo -n`, and
   only after a plan that shows them. Everything
   else runs as the user.
 - **v0.1 writes no secret values to disk at all**, so it also cannot fix a

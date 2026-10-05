@@ -62,7 +62,7 @@ pub fn verify(loaded: &LoadedProfile, observed: &ObservedState) -> VerifyReport 
     let mut results: Vec<CheckResult> = Vec::new();
     let profile = &loaded.profile;
 
-    // Packages (apt, dnf, pacman share one honest shape: unavailable →
+    // Packages (apt, dnf, pacman, apk share one honest shape: unavailable →
     // Unsupported, installed → Match/lock-drift, absent → Missing).
     verify_native_packages(
         &profile.packages.apt,
@@ -83,6 +83,13 @@ pub fn verify(loaded: &LoadedProfile, observed: &ObservedState) -> VerifyReport 
         &observed.pacman_packages,
         observed.pacman_unavailable,
         loaded.lock.as_ref().map(|l| &l.pacman),
+        &mut results,
+    );
+    verify_native_packages(
+        &profile.packages.apk,
+        &observed.apk_packages,
+        observed.apk_unavailable,
+        loaded.lock.as_ref().map(|l| &l.apk),
         &mut results,
     );
 
@@ -398,7 +405,7 @@ fn check(resource: &str, target: &str, status: CheckStatus, detail: &str) -> Che
 }
 
 /// One native package manager's slice of verification (shared by apt, dnf,
-/// and pacman so every manager reports identically).
+/// pacman, and apk so every manager reports identically).
 fn verify_native_packages(
     desired: &[String],
     installed: &std::collections::BTreeMap<String, String>,

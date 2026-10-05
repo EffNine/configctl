@@ -25,8 +25,9 @@ pub struct PackageRecord {
     /// Architecture when the manager reported one (dpkg, snap, flatpak).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
-    /// Manager that reported it: `apt`, `dnf`, `pacman`, `snap`, `flatpak`,
-    /// `cargo`, `rustup`, `npm`, `pip`, `pipx`, `uv`, `go`, `mise`, `asdf`.
+    /// Manager that reported it: `apt`, `dnf`, `pacman`, `apk`, `snap`,
+    /// `flatpak`, `cargo`, `rustup`, `npm`, `pip`, `pipx`, `uv`, `go`,
+    /// `mise`, `asdf`.
     pub manager: String,
     /// Install location when known (e.g. `~/.cargo/bin`, bundle path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +189,52 @@ fn pacman_parse(text: &str) -> Vec<PackageRecord> {
             location: None,
             explicit: None,
             provenance: "pacman".into(),
+        });
+    }
+    out
+}
+
+/// `apk info -v` output: `name-version-rN` per line (Alpine). Names may
+/// contain hyphens, so parse right-to-left: strip the trailing `-r<digits>`
+/// revision, then split at the last hyphen whose suffix starts with a
+/// digit. Lines that do not match are skipped, never guessed (the full
+/// version, revision included, is preserved).
+fn apk_parse(text: &str) -> Vec<PackageRecord> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((rest, revision)) = line.rsplit_once('-') else {
+            continue;
+        };
+        let Some(digits) = revision.strip_prefix('r') else {
+            continue;
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Some((name, version)) = rest.rsplit_once('-') else {
+            continue;
+        };
+        if !version.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        let (Some(name), Some(version)) = (
+            sanitize_name(name),
+            sanitize_version(&format!("{version}-{revision}")),
+        ) else {
+            continue;
+        };
+        out.push(PackageRecord {
+            name,
+            version: Some(version),
+            arch: None,
+            manager: "apk".into(),
+            location: None,
+            explicit: None,
+            provenance: "apk".into(),
         });
     }
     out
@@ -488,6 +535,7 @@ pub fn collect_packages(
             vec!["-qa", "--queryformat", "%{NAME}\t%{EVR}\t%{ARCH}\n"],
         ),
         ("pacman", "pacman", vec!["-Q"]),
+        ("apk", "apk", vec!["info", "-v"]),
         ("snap", "snap", vec!["list"]),
         (
             "flatpak",
@@ -509,6 +557,7 @@ pub fn collect_packages(
             "apt" => apt_parse(text),
             "dnf" => dnf_parse(text),
             "pacman" => pacman_parse(text),
+            "apk" => apk_parse(text),
             "snap" => snap_parse(text),
             "flatpak" => flatpak_parse(text),
             "cargo" => cargo_parse(text),

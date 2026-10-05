@@ -177,10 +177,10 @@ pub fn build_plan(
     let profile = &loaded.profile;
 
     // ---- Packages (rank 1) ----
-    // apt, dnf, and pacman share one honest shape: unavailable → Unsupported
-    // + warning (never a silent skip); missing → PackageInstall; lock drift →
-    // report-only PackageVersionMismatch (v1 never downgrades). Rollback is
-    // Unsupported for every manager (report-only, like apt).
+    // apt, dnf, pacman, and apk share one honest shape: unavailable →
+    // Unsupported + warning (never a silent skip); missing → PackageInstall;
+    // lock drift → report-only PackageVersionMismatch (v1 never downgrades).
+    // Rollback is Unsupported for every manager (report-only, like apt).
     plan_native_packages(
         "apt",
         "install via apt",
@@ -208,6 +208,16 @@ pub fn build_plan(
         &observed.pacman_packages,
         observed.pacman_unavailable,
         loaded.lock.as_ref().map(|l| &l.pacman),
+        &mut operations,
+        &mut warnings,
+    );
+    plan_native_packages(
+        "apk",
+        "install via apk",
+        &profile.packages.apk,
+        &observed.apk_packages,
+        observed.apk_unavailable,
+        loaded.lock.as_ref().map(|l| &l.apk),
         &mut operations,
         &mut warnings,
     );
@@ -757,7 +767,7 @@ fn mk_op(
 /// Execution order: packages → files → env → services → git → core.
 fn provider_rank(p: &str) -> u8 {
     match p {
-        "apt" | "dnf" | "pacman" => 1,
+        "apt" | "dnf" | "pacman" | "apk" => 1,
         "files" => 2,
         "env" => 3,
         "systemd" => 4,
@@ -766,11 +776,11 @@ fn provider_rank(p: &str) -> u8 {
     }
 }
 
-/// One native package manager's slice of the plan (shared by apt, dnf, and
-/// pacman so every manager is equally honest: unavailable → `Unsupported` +
-/// warning, missing → `PackageInstall`, lock drift → report-only
-/// `PackageVersionMismatch`). `install_via` is the provider-specific summary
-/// fragment (`install via apt`, …).
+/// One native package manager's slice of the plan (shared by apt, dnf,
+/// pacman, and apk so every manager is equally honest: unavailable →
+/// `Unsupported` + warning, missing → `PackageInstall`, lock drift →
+/// report-only `PackageVersionMismatch`). `install_via` is the
+/// provider-specific summary fragment (`install via apt`, …).
 #[allow(clippy::too_many_arguments)]
 fn plan_native_packages(
     provider: &str,

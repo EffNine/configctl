@@ -17,7 +17,7 @@ commitment), **Rejected** (will not be built as described).
 |---|---|---|
 | macOS support | Post-v1.0 | Different package/secret/init model; needs its own provider work |
 | Windows support | Unscheduled | No plan; POSIX assumptions are deep |
-| Arch / Fedora / Alpine package managers (`pacman`, `dnf`, `apk`) | Partially shipped: `dnf` + `pacman` are implemented (native probe, plan/apply/verify, report-only rollback); `apk` remains Post-v1.0 | Provider boundary exists; implementation is real work |
+| Arch / Fedora / Alpine package managers (`pacman`, `dnf`, `apk`) | Shipped: `dnf`, `pacman`, and `apk` are implemented (native probe, plan/apply/verify, report-only rollback) | Provider boundary used as planned; remaining ecosystems (`brew`, `nix`) stay deferred |
 | Homebrew on Linux (`brew`) | Unscheduled | Overlaps user-space package managers; unclear value |
 | Nix / NixOS integration | Unscheduled | Different philosophy; would require a fundamentally different provider |
 | Non-systemd init (OpenRC, runit, sysvinit) | Unscheduled | Service provider would be a separate backend |
@@ -55,7 +55,7 @@ commitment), **Rejected** (will not be built as described).
 | Feature | State | Rationale |
 |---|---|---|
 | Package version pinning enforcement | Post-v1.0 | `packages.lock` records and reports only in v0.1 |
-| Package downgrade / rollback | Rejected for v1.0 | Not reliable with apt (nor with dnf/pacman); misleading to promise |
+| Package downgrade / rollback | Rejected for v1.0 | Not reliable with apt (nor with dnf/pacman/apk); misleading to promise |
 | Automatic `sudo` password prompting | Rejected for v0.1 | Uses `sudo -n` only; interactive elevation is a user decision |
 | System-level systemd units | Post-v1.0 | Requires root/PolicyKit design |
 | Snap / Flatpak / AppImage management | Unscheduled | Each is a separate provider |

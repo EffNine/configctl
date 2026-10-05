@@ -119,6 +119,9 @@ pub struct Packages {
     /// Sorted, unique pacman package names (Arch-likes).
     #[serde(default)]
     pub pacman: Vec<String>,
+    /// Sorted, unique apk package names (Alpine).
+    #[serde(default)]
+    pub apk: Vec<String>,
     /// v2: per-manager package names (`cargo`, `npm`, `pip`, `mise`, …).
     /// Sorted, unique each. apt stays top-level for v1 compatibility.
     #[serde(default)]
@@ -399,6 +402,9 @@ pub struct PackagesLock {
     /// pacman name → version (record-and-report, like apt).
     #[serde(default)]
     pub pacman: std::collections::BTreeMap<String, String>,
+    /// apk name → version (record-and-report, like apt; includes `-rN`).
+    #[serde(default)]
+    pub apk: std::collections::BTreeMap<String, String>,
     /// v2: per-manager name → version (`cargo → {ripgrep → 14.1.0}`).
     #[serde(default)]
     pub other: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
@@ -438,6 +444,8 @@ impl Profile {
         self.packages.dnf.dedup();
         self.packages.pacman.sort();
         self.packages.pacman.dedup();
+        self.packages.apk.sort();
+        self.packages.apk.dedup();
         for names in self.packages.other.values_mut() {
             names.sort();
             names.dedup();
@@ -504,7 +512,7 @@ impl Profile {
             }
         }
 
-        // Packages (v1 apt + native dnf/pacman + v2 per-manager).
+        // Packages (v1 apt + native dnf/pacman/apk + v2 per-manager).
         {
             let mut seen = std::collections::BTreeSet::new();
             for name in &self.packages.apt {
@@ -528,6 +536,14 @@ impl Profile {
                     errors.push(e);
                 }
                 if !seen.insert(format!("pacman:{name}")) {
+                    errors.push(format!("duplicate package entry: {name:?}"));
+                }
+            }
+            for name in &self.packages.apk {
+                if let Err(e) = paths::validate_native_package_name(name) {
+                    errors.push(e);
+                }
+                if !seen.insert(format!("apk:{name}")) {
                     errors.push(format!("duplicate package entry: {name:?}"));
                 }
             }

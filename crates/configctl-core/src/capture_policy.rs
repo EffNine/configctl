@@ -80,7 +80,7 @@ pub fn decide_package(manager: &str, explicit: Option<bool>) -> CaptureDecision 
     match manager {
         // Native system managers: the allowlist capture selects tooling
         // names; the plan/apply path drives installs per manager.
-        "apt" | "dnf" | "pacman" => {
+        "apt" | "dnf" | "pacman" | "apk" => {
             if explicit.unwrap_or(false) {
                 CaptureDecision::capture("explicitly requested system package")
             } else {

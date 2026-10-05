@@ -285,6 +285,9 @@ pub fn rollback_plan(
                             "pacman" => {
                                 crate::package_managers::PacmanProvider::rollback_hint(&op.target)
                             }
+                            "apk" => {
+                                crate::package_managers::ApkProvider::rollback_hint(&op.target)
+                            }
                             "apt" => format!(
                                 "package {}: installed by apply; v1 never auto-removes (manual: apt remove {})",
                                 op.target, op.target

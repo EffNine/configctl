@@ -49,6 +49,10 @@ pub struct ObservedState {
     pub pacman_packages: BTreeMap<String, String>,
     /// True when pacman was wanted but unreachable.
     pub pacman_unavailable: bool,
+    /// Installed apk packages (name → version) for wanted names only.
+    pub apk_packages: BTreeMap<String, String>,
+    /// True when apk was wanted but unreachable.
+    pub apk_unavailable: bool,
     /// Managed file targets (`~/...` as declared) → observation.
     pub files: BTreeMap<String, FileObs>,
     /// Git metadata (None when git unavailable).
@@ -91,8 +95,9 @@ pub fn expand_target(target: &str, home: &Path) -> Option<PathBuf> {
 ///
 /// - `apt_names`: desired apt package names (observation records installed
 ///   versions for exactly these names; nothing else is queried per-package).
-/// - `dnf_names` / `pacman_names`: desired dnf/pacman names (same contract;
-///   empty lists probe nothing and record nothing unavailable).
+/// - `dnf_names` / `pacman_names` / `apk_names`: desired native-manager
+///   names (same contract; empty lists probe nothing and record nothing
+///   unavailable).
 /// - `file_targets`: declared `~/...` targets.
 /// - `git_wanted`: whether to probe git config.
 /// - `services`: desired unit names.
@@ -105,6 +110,7 @@ pub fn observe(
     apt_names: &[String],
     dnf_names: &[String],
     pacman_names: &[String],
+    apk_names: &[String],
     file_targets: &[String],
     git_wanted: bool,
     services: &[String],
@@ -118,6 +124,7 @@ pub fn observe(
         apt_names,
         dnf_names,
         pacman_names,
+        apk_names,
         crate::package_managers::read_os_release().as_ref(),
         file_targets,
         git_wanted,
@@ -138,6 +145,7 @@ pub fn observe_with_os(
     apt_names: &[String],
     dnf_names: &[String],
     pacman_names: &[String],
+    apk_names: &[String],
     os: Option<&crate::package_managers::OsRelease>,
     file_targets: &[String],
     git_wanted: bool,
@@ -175,7 +183,7 @@ pub fn observe_with_os(
         }
     }
 
-    // Native managers (dnf/pacman): distro-gated, binary-probed, then
+    // Native managers (dnf/pacman/apk): distro-gated, binary-probed, then
     // listed — non-matching platforms record `Unavailable` with zero
     // subprocess calls (never a silent skip).
     {
@@ -187,6 +195,10 @@ pub fn observe_with_os(
             crate::package_managers::observe_pacman_packages(runner, os, pacman_names);
         st.pacman_packages = map;
         st.pacman_unavailable = unavailable;
+        let (map, unavailable) =
+            crate::package_managers::observe_apk_packages(runner, os, apk_names);
+        st.apk_packages = map;
+        st.apk_unavailable = unavailable;
     }
 
     // Files.
@@ -447,6 +459,8 @@ pub fn fingerprint(st: &ObservedState) -> String {
         "dnf_unavailable": st.dnf_unavailable,
         "pacman_packages": st.pacman_packages,
         "pacman_unavailable": st.pacman_unavailable,
+        "apk_packages": st.apk_packages,
+        "apk_unavailable": st.apk_unavailable,
         "files": st.files.iter().map(|(k, v)| (k, serde_json::json!({
             "exists": v.exists,
             "is_symlink": v.is_symlink,

@@ -251,7 +251,7 @@ pub fn validate_package_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate a `dnf`/`rpm`/`pacman` package name.
+/// Validate a `dnf`/`rpm`/`pacman`/`apk` package name.
 ///
 /// Broader than the apt grammar (RPM names may start with an uppercase
 /// letter, e.g. `NetworkManager`, and both ecosystems use `_` and `:`) but

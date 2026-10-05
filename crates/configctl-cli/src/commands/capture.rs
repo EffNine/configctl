@@ -322,7 +322,10 @@ fn preview_written(result: &capture::CaptureResult) -> Vec<String> {
         "profile.toml".to_string(),
         "secrets.manifest.toml".to_string(),
     ];
-    if !result.lock.apt.is_empty() || !result.lock.dnf.is_empty() || !result.lock.pacman.is_empty()
+    if !result.lock.apt.is_empty()
+        || !result.lock.dnf.is_empty()
+        || !result.lock.pacman.is_empty()
+        || !result.lock.apk.is_empty()
     {
         v.push("packages.lock.toml".to_string());
     }
@@ -402,10 +405,14 @@ fn adapt_scan(r: &configctl_discovery::ScanResult) -> capture::scan_view::ScanVi
         packages_other: {
             let mut v = Vec::new();
             for p in &r.package_inventory.packages {
-                // Native managers (apt/dnf/pacman) have first-class profile
-                // sections fed by the allowlist capture; only the rest are
-                // observational `other` names.
-                if p.manager != "apt" && p.manager != "dnf" && p.manager != "pacman" {
+                // Native managers (apt/dnf/pacman/apk) have first-class
+                // profile sections fed by the allowlist capture; only the
+                // rest are observational `other` names.
+                if p.manager != "apt"
+                    && p.manager != "dnf"
+                    && p.manager != "pacman"
+                    && p.manager != "apk"
+                {
                     v.push((p.manager.clone(), p.name.clone()));
                 }
             }

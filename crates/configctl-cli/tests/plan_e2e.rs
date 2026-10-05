@@ -190,9 +190,9 @@ fn plan_never_writes_to_home() {
 
 #[test]
 fn native_managers_plan_and_render_per_manager() {
-    // Composition: a profile declaring dnf/pacman packages plans
+    // Composition: a profile declaring dnf/pacman/apk packages plans
     // provider-tagged ops and renders them under per-manager groups. On this
-    // (non-native) host both managers are Unavailable — recorded honestly as
+    // (non-native) host all managers are Unavailable — recorded honestly as
     // Unsupported, never silently skipped.
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -202,7 +202,7 @@ fn native_managers_plan_and_render_per_manager() {
     std::fs::create_dir_all(&bundle).unwrap();
     std::fs::write(
         bundle.join("profile.toml"),
-        "schema_version = 1\nname = \"work\"\n\n[packages]\ndnf = [\"htop\"]\npacman = [\"jq\"]\n",
+        "schema_version = 1\nname = \"work\"\n\n[packages]\ndnf = [\"htop\"]\npacman = [\"jq\"]\napk = [\"curl\"]\n",
     )
     .unwrap();
     let runner = FakeCommandRunner::new();
@@ -226,9 +226,15 @@ fn native_managers_plan_and_render_per_manager() {
         .iter()
         .find(|o| o.provider == "pacman")
         .expect("pacman op");
+    let apk_op = plan
+        .operations
+        .iter()
+        .find(|o| o.provider == "apk")
+        .expect("apk op");
     // Provider tags are always present (static registration). The Unsupported
-    // expectation below only holds off the native distro — on a Fedora/Arch
-    // host the same ops would be installs, so gate on the live platform.
+    // expectation below only holds off the native distro — on a Fedora/Arch/
+    // Alpine host the same ops would be installs, so gate on the live
+    // platform.
     let live = configctl_core::package_managers::read_os_release();
     let native = |family| {
         live.as_ref()
@@ -242,10 +248,17 @@ fn native_managers_plan_and_render_per_manager() {
     if !native(NativeFamily::Arch) {
         assert_eq!(format!("{:?}", pacman_op.kind), "Unsupported");
     }
+    if !native(NativeFamily::Alpine) {
+        assert_eq!(format!("{:?}", apk_op.kind), "Unsupported");
+    }
     let human = plan_cmd::render_human(&plan);
     assert!(human.contains("Packages (dnf):"), "{human:?}");
     assert!(human.contains("Packages (pacman):"), "{human:?}");
+    assert!(human.contains("Packages (apk):"), "{human:?}");
     if !native(NativeFamily::Fedora) {
         assert!(human.contains("package htop: package manager unavailable"));
+    }
+    if !native(NativeFamily::Alpine) {
+        assert!(human.contains("package curl: package manager unavailable"));
     }
 }

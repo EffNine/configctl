@@ -93,6 +93,7 @@ config_files = ["Cargo.toml"]
 | `packages.apt` | no | Sorted unique names, `[a-z0-9][a-z0-9+.-]*`. No shell syntax. |
 | `packages.dnf` | no | Sorted unique Fedora/RHEL names (broader alphabet, may start uppercase). No shell syntax. |
 | `packages.pacman` | no | Sorted unique Arch names (same broader alphabet). No shell syntax. |
+| `packages.apk` | no | Sorted unique Alpine names (same broader alphabet). No shell syntax. |
 | `[[files]]` | no | `target` must start with `~/`, no `..`; `source` bundle-relative, no `..`; `mode` 3–4 digit octal. Duplicate targets rejected. |
 | `[git]` | no | Allowlisted metadata only (see §4). |
 | `[[projects]]` | no | `path` portable (`~/...` preferred; traversal-free absolute accepted for fixtures); `env_schema` must be `env/*.toml`. Duplicate paths/names rejected. |
@@ -223,5 +224,5 @@ reproducibility comparisons).
   dotfiles have payloads copied (source repos are never copied).
 - `x-*` extension keys are rejected (deferred to P3+).
 - Package capture covers native system managers (`apt` via `dpkg-query`,
-  `dnf` via `rpm -qa`, `pacman` via `pacman -Q`); other
+  `dnf` via `rpm -qa`, `pacman` via `pacman -Q`, `apk` via `apk info -v`); other
   managers yield `unsupported` (not an error).

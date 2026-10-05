@@ -130,13 +130,15 @@ env_files = [".env", ".env.local", ".env.test"]   # optional; default: all disco
 | `apt` | array of strings | Package names matching `[a-z0-9][a-z0-9+.-]*`. Duplicates rejected. Shell metacharacters rejected. Versions are not specified here; see `packages.lock.toml`. |
 | `dnf` | array of strings | Fedora/RHEL package names (broader alphabet: may start uppercase, e.g. `NetworkManager`; still no shell syntax, no `..`, no paths). Duplicates rejected. Versions live in `packages.lock.toml`. |
 | `pacman` | array of strings | Arch package names (same broader alphabet as `dnf`). Duplicates rejected. Versions live in `packages.lock.toml`. |
+| `apk` | array of strings | Alpine package names (same broader alphabet as `dnf`). Duplicates rejected. Versions live in `packages.lock.toml` (full `version-rN` preserved). |
 | `other` | map: manager → array of strings | v2 only. Names observed from other managers (`cargo`, `npm`, `pip`, `mise`, …), sorted and unique per manager. **Observational**: recorded in the profile; `apply` does not install them in v1.1 (see LIMITATIONS.md). |
 
-Unknown top-level package-manager keys (`apk`, `brew`, …) are rejected —
+Unknown top-level package-manager keys (`brew`, `nix`, …) are rejected —
 they are deferred features, and accepting-and-ignoring them would
 be dishonest. In v2, multi-manager names live under `[packages.other]` and
-apt stays top-level for v1 compatibility; `dnf`/`pacman` are first-class
-keys alongside `apt` (plan/apply/verify handle all three identically).
+apt stays top-level for v1 compatibility; `dnf`/`pacman`/`apk` are
+first-class keys alongside `apt` (plan/apply/verify handle all four
+identically).
 
 ### 2.3 `[[files]]`
 
@@ -346,6 +348,9 @@ git = "1:2.43.0-1.fc40"
 [pacman]                     # Arch names → version
 ripgrep = "14.1.0-1"
 
+[apk]                        # Alpine names → version (revision preserved)
+musl-utils = "1.2.6-r2"
+
 [other.cargo]              # v2: per-manager name → version
 ripgrep = "14.1.0"
 
@@ -357,7 +362,7 @@ typescript = "5.6.3"
 - v0.1 semantics: **record and report**; version pinning/downgrade enforcement
   is deferred. `verify` reports version drift when a lock entry exists.
 - v2 `[other]` versions are observational provenance; `[apt]`/`[dnf]`/
-  `[pacman]` feed planning for their own managers.
+  `[pacman]`/`[apk]` feed planning for their own managers.
 
 ---
 
